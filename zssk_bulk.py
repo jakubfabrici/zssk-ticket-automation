@@ -141,6 +141,28 @@ def load_person(path: str | os.PathLike[str]) -> Person:
     )
 
 
+def save_person(path: str | os.PathLike[str], person: Person) -> None:
+    """Write person.txt in the exact format load_person parses.
+
+    repr() gives a quoted Python literal, so names with apostrophes survive
+    the ast.literal_eval on the way back. 0600 because this is personal data.
+    Values must not contain '#': load_person treats it as a comment start.
+    """
+    p = Path(path)
+    lines = [
+        "# Passenger data for the ZSSK checkout. Written by the web UI.",
+        f"name = {person.name!r}",
+        f"surname = {person.surname!r}",
+        f"email = {person.email!r}",
+        f"train_card = {person.train_card!r}",
+        "",
+    ]
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text("\n".join(lines), encoding="utf-8")
+    tmp.chmod(0o600)
+    tmp.replace(p)
+
+
 WEEKDAY_CODES = ("po", "ut", "st", "stv", "pia", "so", "ne")
 
 
