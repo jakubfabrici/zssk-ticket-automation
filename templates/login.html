@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Prihlásenie{% endblock %}
+{% block content %}
+<h1>Prihlásenie</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post">
+  <label>Heslo <input type="password" name="password" autofocus required></label>
+  <button type="submit">Prihlásiť</button>
+</form>
+{% endblock %}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ZSSK lístky{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <strong>ZSSK lístky</strong>
+  {% if authed %}
+  <nav>
+    {# The guard lets this base render before Tasks 8 and 9 add their views. #}
+    {% for endpoint, label in [('routes_list', 'Trasy'), ('settings', 'Nastavenia'),
+                               ('run_page', 'Beh'), ('history', 'História')] %}
+      {% if endpoint in view_names %}<a href="{{ url_for(endpoint) }}">{{ label }}</a>{% endif %}
+    {% endfor %}
+    <a href="{{ url_for('logout') }}">Odhlásiť</a>
+  </nav>
+  {% endif %}
+</header>
+{% with messages = get_flashed_messages() %}
+  {% for message in messages %}<p class="flash">{{ message }}</p>{% endfor %}
+{% endwith %}
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>
