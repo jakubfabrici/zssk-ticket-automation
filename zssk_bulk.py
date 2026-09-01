@@ -140,6 +140,90 @@ def load_person(path: str | os.PathLike[str]) -> Person:
     )
 
 
+WEEKDAY_CODES = ("po", "ut", "st", "stv", "pia", "so", "ne")
+
+
+def format_weekdays(days: tuple[int, ...]) -> str:
+    """Inverse of parse_weekdays, using the Slovak short codes."""
+    return ",".join(WEEKDAY_CODES[d] for d in sorted(days))
+
+
+@dataclass(frozen=True)
+class Route:
+    """One saved recurring purchase: a Trip plus scheduling limits."""
+
+    id: str
+    name: str
+    trip: Trip
+    max: int | None = None            # buy at most this many dates; None = whole window
+    enabled: bool = True
+
+
+def _route_from_mapping(route_id: str, raw: dict) -> Route:
+    for key in ("departure", "arrival", "time"):
+        if not raw.get(key):
+            raise SystemExit(f"route {route_id!r}: missing {key!r}")
+    try:
+        weekdays = parse_weekdays(raw.get("weekdays") or "")
+    except ValueError as exc:
+        raise SystemExit(f"route {route_id!r}: {exc}") from exc
+    raw_max = raw.get("max")
+    if raw_max is not None and (isinstance(raw_max, bool)
+                                or not isinstance(raw_max, int) or raw_max < 1):
+        raise SystemExit(f"route {route_id!r}: max must be a positive integer or null")
+    return Route(
+        id=str(route_id),
+        name=str(raw.get("name") or route_id),
+        trip=Trip(departure=raw["departure"], arrival=raw["arrival"],
+                  time=raw["time"], weekdays=weekdays,
+                  train=(raw.get("train") or None)),
+        max=raw_max,
+        enabled=bool(raw.get("enabled", True)),
+    )
+
+
+def load_routes(config: dict) -> list[Route]:
+    """Routes from the new {"routes": [...]} format, or the legacy flat file.
+
+    A legacy single-trip config (the original bulk.json) becomes one enabled
+    route called "default", so an existing installation keeps working without
+    editing anything.
+    """
+    if "routes" in config:
+        raw_routes = config["routes"]
+        if not isinstance(raw_routes, list):
+            raise SystemExit('"routes" must be a list')
+        # An empty list is valid: the web UI writes it after the last route is
+        # deleted. Only RUNNING without routes is an error (see select_routes
+        # and main), not merely storing none.
+        routes: list[Route] = []
+        seen: set[str] = set()
+        for position, raw in enumerate(raw_routes):
+            route_id = str(raw.get("id") or f"route{position + 1}")
+            if route_id in seen:
+                raise SystemExit(f"duplicate route id {route_id!r}")
+            seen.add(route_id)
+            routes.append(_route_from_mapping(route_id, raw))
+        return routes
+    if config.get("departure"):
+        legacy = dict(config)
+        legacy.setdefault("name",
+                          f"{config.get('departure')} -> {config.get('arrival')}")
+        return [_route_from_mapping("default", legacy)]
+    return []
+
+
+def select_routes(routes: list[Route], route_id: str | None) -> list[Route]:
+    """--route picks one route even when disabled; default is every enabled one."""
+    if route_id:
+        matches = [r for r in routes if r.id == route_id]
+        if not matches:
+            known = ", ".join(r.id for r in routes) or "none"
+            raise SystemExit(f"unknown route {route_id!r} (known: {known})")
+        return matches
+    return [r for r in routes if r.enabled]
+
+
 # --------------------------------------------------------------------------
 # planning
 # --------------------------------------------------------------------------
