@@ -158,8 +158,11 @@ def save_person(path: str | os.PathLike[str], person: Person) -> None:
         "",
     ]
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text("\n".join(lines), encoding="utf-8")
-    tmp.chmod(0o600)
+    # 0600 from the first byte: personal data, same reasoning as save_env
+    # in zssk_web.py - write-then-chmod leaves a world-readable window.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
     tmp.replace(p)
 
 

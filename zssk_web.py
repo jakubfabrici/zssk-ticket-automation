@@ -114,9 +114,11 @@ def load_env(path: Path) -> dict:
 
 def save_env(path: Path, values: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text("".join(f"{k}={v}\n" for k, v in values.items()),
-                   encoding="utf-8")
-    tmp.chmod(0o600)
+    # 0600 from the first byte: this holds the password hash and session
+    # secret, and write-then-chmod leaves a world-readable window.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write("".join(f"{k}={v}\n" for k, v in values.items()))
     tmp.replace(path)
 
 
