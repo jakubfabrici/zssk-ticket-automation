@@ -1,0 +1,39 @@
+<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<title>Voľba cestujúcich</title><script src="_mock.js"></script></head>
+<body>
+<h1>Voľba cestujúcich</h1>
+<div class="passenger">
+  <a href="#" id="typeToggle" onclick="show('typeList')">Dospelý (25 - 62 r.)</a>
+  <ul id="typeList" style="display:none">
+    <li><a href="#" onclick="pick('passenger', 'Mladý (16 - 25 r.)', 'typeToggle', 'typeList')">Mladý (16 - 25 r.)</a></li>
+    <li><a href="#" onclick="pick('passenger', 'Senior', 'typeToggle', 'typeList')">Senior (62+)</a></li>
+  </ul>
+
+  <a href="#" id="cardToggle" onclick="show('cardList')">Bez zľavy</a>
+  <ul id="cardList" style="display:none">
+    <li><a href="#" onclick="pick('card', 'Klasik', 'cardToggle', 'cardList')">Klasik railplus</a></li>
+    <li><a href="#" onclick="pick('card', 'student', 'cardToggle', 'cardList')">Preukaz pre žiaka/Študenta</a></li>
+  </ul>
+
+  <label for="freeTransport">Nárok na bezplatnú prepravu</label>
+  <input type="checkbox" id="freeTransport">
+</div>
+<input type="submit" id="actionIndividualContinue" value="Pokračovať"
+       onclick="location.href='offer.html'">
+<script>
+function show(id) { document.getElementById(id).style.display = 'block'; return false; }
+function pick(key, value, toggleId, listId) {
+  remember(key, value);
+  document.getElementById(toggleId).textContent = value;
+  document.getElementById(listId).style.display = 'none';
+  return false;
+}
+// The label is what a person clicks; forward it to the checkbox the way the
+// real styled control does.
+document.querySelector('label[for=freeTransport]').addEventListener('click', function () {
+  var box = document.getElementById('freeTransport');
+  box.checked = !box.checked;
+  remember('free', box.checked);
+});
+</script>
+</body></html>

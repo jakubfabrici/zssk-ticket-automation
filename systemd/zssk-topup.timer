@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly top-up of the ZSSK ticket booking window
+
+[Timer]
+# Once a week is enough: the e-shop's window only rolls forward by seven days
+# between runs. Randomised so it does not hit the site on the minute.
+OnCalendar=Mon 09:00
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

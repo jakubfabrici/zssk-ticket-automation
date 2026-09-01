@@ -1,0 +1,25 @@
+<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<title>Vyhľadanie spojenia — výsledky</title><script src="_mock.js"></script></head>
+<body>
+<div id="dayGroupLoop">
+  <div class="connection" id="eSalesConnectionLoop:0" onclick="expand(0, '09:12')">
+    <span class="time">09:12</span><span>Os 8809</span>
+    <a class="btn buy" id="buy0" style="display:none" href="#"
+       onclick="go('09:12')">Kúpiť lístok</a>
+  </div>
+  <div class="connection" id="eSalesConnectionLoop:1" onclick="expand(1, '07:12')">
+    <span class="time">07:12</span><span>REX 1810</span>
+    <a class="btn buy" id="buy1" style="display:none" href="#"
+       onclick="go('07:12')">Kúpiť lístok</a>
+  </div>
+</div>
+<script>
+// Only the expanded connection offers its "Kúpiť lístok" button, so picking
+// the wrong row cannot silently buy the wrong train.
+function expand(i, t) {
+  document.querySelectorAll('.buy').forEach(function (b) { b.style.display = 'none'; });
+  document.getElementById('buy' + i).style.display = 'inline';
+}
+function go(t) { remember('train', t); location.href = 'passenger.html'; return false; }
+</script>
+</body></html>
