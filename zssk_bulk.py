@@ -439,13 +439,18 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
                    "and not(contains(normalize-space(.),'konto'))]"),
     ],
     "login_user": [
+        # The konto login is an Angular SPA at /aut/ with stable data-cy marks.
+        (BY_CSS, "[data-cy=login-email]"),
+        (BY_CSS, "input[name='username']"),
         (BY_CSS, "input[type='email']"),
         (BY_CSS, "input[id*='mail']"),
-        (BY_CSS, "input[id*='user']"),
         (BY_CSS, "input[name*='user']"),
-        (BY_CSS, "input[id*='login']"),
     ],
-    "login_pass": [(BY_CSS, "input[type='password']")],
+    "login_pass": [
+        (BY_CSS, "[data-cy=login-pwd]"),
+        (BY_CSS, "input[name='password']"),
+        (BY_CSS, "input[type='password']"),
+    ],
     "login_submit": [
         (BY_XPATH, "//button[contains(normalize-space(.),'Prihlásiť')]"),
         (BY_XPATH, "//input[@type='submit' and contains(@value,'Prihlás')]"),
@@ -730,31 +735,60 @@ def click_continue(driver, timeout: float = 25.0) -> None:
     log.warning("continue: no visible page change within %.0fs", timeout)
 
 
+def _logged_in(driver) -> bool:
+    try:
+        body = driver.find_element(BY_XPATH, "//body").get_attribute("textContent") or ""
+    except WebDriverException:
+        return False
+    return "Používateľ" in body and "Neprihlásený" not in body
+
+
+def _on_login_page(driver) -> bool:
+    try:
+        return bool(driver.find_elements(
+            BY_CSS, "[data-cy='login-pwd'], input[name='password']"))
+    except WebDriverException:
+        return False
+
+
 def login(driver, url: str, user: str, password: str) -> None:
-    """Sign into the ZSSK konto; raise StepFailed when the header still says
-    "Neprihlásený" afterwards. Callers must NOT fall back to a guest purchase:
-    when credentials are configured, the app delivery is the whole point.
+    """Sign into the ZSSK konto; raise StepFailed when the shop header still
+    says "Neprihlásený" afterwards. Callers must NOT fall back to a guest
+    purchase: when credentials are configured, app delivery is the point.
+
+    Three observed entry states, all handled: the persistent profile still
+    holds a valid session (nothing to do); an expired session redirects the
+    shop straight to the /aut/ login SPA (no Prihlásiť link to click); or the
+    shop renders normally and the header link leads to the SPA.
     """
     driver.get(url)
-    click(driver, "login_link")
-    element = find(driver, "login_user")
+    time.sleep(1.5)
+    if _logged_in(driver):
+        log.info("ZSSK konto: session z profilu stále platí")
+        return
+    if not _on_login_page(driver):
+        click(driver, "login_link")
+    element = find(driver, "login_user", timeout=20)
     element.clear()
     element.send_keys(user)
     element = find(driver, "login_pass")
     element.clear()
     element.send_keys(password)
     click(driver, "login_submit")
-    deadline = time.monotonic() + 25
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
-            body = driver.find_element(BY_XPATH, "//body").get_attribute("textContent") or ""
+            on_aut = "/aut" in (driver.current_url or "")
         except WebDriverException:
-            body = ""
-        if "Používateľ" in body and "Neprihlásený" not in body:
-            log.info("prihlásený do ZSSK konta")
-            return
+            on_aut = True
+        if not on_aut or _logged_in(driver):
+            break
         time.sleep(0.5)
-    raise StepFailed("login", "the header still shows Neprihlásený")
+    driver.get(url)
+    time.sleep(1.0)
+    if not _logged_in(driver):
+        raise StepFailed("login", "hlavička e-shopu stále nehlási prihláseného")
+    log.info("prihlásený do ZSSK konta")
 
 
 def dump_state(driver, tag: str, directory: Path) -> Path | None:
