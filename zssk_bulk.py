@@ -388,6 +388,11 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
         (BY_XPATH, "//li/a[contains(normalize-space(.),'tudent')]"),
     ],
     "free_transport": [
+        # Live DOM 2026-09: a real checkbox, pre-checked once the student
+        # discount is picked, labelled "Nárok na 100 % zľavu z cestovného".
+        (BY_CSS, "input[id$='freeTicket']"),
+        (BY_CSS, "label[data-cy^='freeTicket']"),
+        (BY_XPATH, "//label[contains(normalize-space(.),'100 % zľavu')]"),
         (BY_XPATH, "//label[contains(normalize-space(.),'bezplatn')]"),
         (BY_XPATH, "//*[contains(normalize-space(.),'Nárok na bezplatnú prepravu')]"
                    "/preceding-sibling::*[1]"),
@@ -457,6 +462,31 @@ def click(driver, step: str, timeout: float = 15.0) -> None:
 # --------------------------------------------------------------------------
 # checkout flow
 # --------------------------------------------------------------------------
+
+def ensure_checked(driver, step: str, timeout: float = 15.0) -> None:
+    """Make sure `step`'s checkbox ends up CHECKED, clicking only when needed.
+
+    The live passenger page pre-checks the free-transport box as soon as the
+    student discount is picked; the old unconditional click would uncheck the
+    very entitlement that makes the fare zero.
+    """
+    element = find(driver, step, timeout)
+    target = element
+    if element.tag_name == "label":
+        for_id = element.get_attribute("for")
+        if for_id:
+            hits = driver.find_elements(BY_ID, for_id)
+            if hits:
+                target = hits[0]
+    if (target.get_attribute("type") or "").lower() == "checkbox" and target.is_selected():
+        log.debug("%s already checked", step)
+        return
+    try:
+        element.click()
+    except WebDriverException:
+        driver.execute_script("arguments[0].click();", element)
+    log.debug("clicked %s", step)
+
 
 def fill_station(driver, step: str, value: str) -> None:
     """Type a station and take the typeahead suggestion.
@@ -607,7 +637,7 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     click(driver, "passenger_young")
     click(driver, "card_type")
     click(driver, "card_student")
-    click(driver, "free_transport")
+    ensure_checked(driver, "free_transport")
     click(driver, "continue")          # Voľba cestujúcich
     click(driver, "continue")          # Voľba cestovného lístka
     click(driver, "continue")          # Doplnkové služby
