@@ -26,7 +26,7 @@
     <button type="submit">{{ 'Vypnúť' if card.route.enabled else 'Zapnúť' }}</button>
   </form>
   <form class="inline" method="post" action="{{ url_for('route_delete', rid=card.route.id) }}"
-        onsubmit="return confirm('Naozaj zmazať trasu {{ card.route.name }}?')">
+        onsubmit="return confirm('Naozaj zmazať túto trasu?')">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <button type="submit" class="danger">Zmazať</button>
   </form>

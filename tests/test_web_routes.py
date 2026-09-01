@@ -74,6 +74,27 @@ def test_duplicate_id_rejected(client):
     assert "existuje" in response.get_data(as_text=True)
 
 
+def test_route_new_duplicate_check_holds_inside_the_lock(client, tmp_path, monkeypatch):
+    create_route(client)                      # tatran-ne exists on disk
+    token = csrf(client, "/routes")           # token without touching /routes/new
+    import zssk_web
+    real_read = zssk_web.read_cfg
+    state = {"armed": True}
+
+    def racing_read(app):
+        if state["armed"]:
+            state["armed"] = False            # only the view's pre-check read lies
+            return {}
+        return real_read(app)
+
+    monkeypatch.setattr(zssk_web, "read_cfg", racing_read)
+    response = client.post("/routes/new", data=dict(VALID, csrf=token))
+    assert response.status_code == 200
+    assert "existuje" in response.get_data(as_text=True)
+    saved = json.loads((tmp_path / "etc" / "routes.json").read_text())
+    assert [r["id"] for r in saved["routes"]] == ["tatran-ne"]
+
+
 def test_edit_changes_fields_and_keeps_id(client, tmp_path):
     create_route(client)
     token = csrf(client, "/routes/tatran-ne/edit")

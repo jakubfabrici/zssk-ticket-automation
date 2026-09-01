@@ -80,6 +80,10 @@ def mutate_cfg(app: Flask, mutate) -> dict:
         return cfg
 
 
+class _DuplicateRoute(Exception):
+    """Raised inside mutate_cfg when the locked re-check finds the id taken."""
+
+
 def ledger_path(app: Flask, cfg: dict) -> Path:
     return Path(cfg.get("ledger") or app.config["STATE_DIR"] / "ledger.json")
 
@@ -306,7 +310,18 @@ def register_views(app: Flask) -> None:
         if request.method == "POST":
             parsed, errors = parse_route_form(request.form, existing)
             if parsed:
-                mutate_cfg(app, lambda c: c.setdefault("routes", []).append(parsed))
+                def apply(cfg):
+                    if any(r.get("id") == parsed["id"]
+                           for r in cfg.get("routes", [])):
+                        raise _DuplicateRoute
+                    cfg.setdefault("routes", []).append(parsed)
+                try:
+                    mutate_cfg(app, apply)
+                except _DuplicateRoute:
+                    return render_template(
+                        "route_form.html",
+                        errors=[f"Trasa s ID '{parsed['id']}' už existuje."],
+                        values=request.form, editing=None)
                 flash("Trasa pridaná.")
                 return redirect(url_for("routes_list"))
             return render_template("route_form.html", errors=errors,
