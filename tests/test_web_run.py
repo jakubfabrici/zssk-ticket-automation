@@ -1,0 +1,153 @@
+import json
+import re
+import sys
+import time
+
+import pytest
+
+import zssk_web
+from zssk_runner import Runner
+
+CSRF_RE = re.compile(r'name="csrf" value="([0-9a-f]+)"')
+
+ROUTES = {"routes": [
+    {"id": "tatran-ne", "name": "Tatran", "departure": "SNV",
+     "arrival": "Košice", "time": "16:58", "train": "EX 619",
+     "weekdays": "ne", "max": 2, "enabled": True}]}
+
+FAKE_BULK = """\
+import json, sys
+with open(sys.argv[1], "w") as handle:
+    json.dump(sys.argv[2:], handle)
+print("fake bulk ran")
+"""
+
+
+@pytest.fixture
+def env(tmp_path):
+    fake = tmp_path / "fake_bulk.py"
+    fake.write_text(FAKE_BULK)
+    argv_file = tmp_path / "argv.json"
+    app = zssk_web.create_app(
+        tmp_path / "etc", tmp_path / "state", runner=Runner(),
+        bulk_argv=[sys.executable, str(fake), str(argv_file)], fail_delay=0)
+    app.config["TESTING"] = True
+    client = app.test_client()
+    client.get("/setup")
+    client.post("/setup", data={"password": "tajneheslo1",
+                                "password2": "tajneheslo1"})
+    (tmp_path / "etc" / "routes.json").write_text(json.dumps(ROUTES))
+    return client, tmp_path, argv_file
+
+
+def csrf(client, path="/run"):
+    return CSRF_RE.search(client.get(path).get_data(as_text=True)).group(1)
+
+
+def fill_person(client, tmp_path):
+    token = CSRF_RE.search(client.get("/settings").get_data(as_text=True)).group(1)
+    client.post("/settings", data={"name": "Test", "surname": "Tester",
+                                   "email": "test@test.sk",
+                                   "train_card": "1", "delay": "45",
+                                   "csrf": token})
+
+
+def wait_for_argv(argv_file, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if argv_file.exists():
+            return json.loads(argv_file.read_text())
+        time.sleep(0.05)
+    raise AssertionError("fake bulk never ran")
+
+
+def test_buttons_disabled_without_person(env):
+    client, _, _ = env
+    page = client.get("/run").get_data(as_text=True)
+    assert "Najprv vyplň osobné údaje" in page
+
+
+def test_start_refused_without_person(env):
+    client, _, _ = env
+    response = client.post("/run/start", data={"mode": "dry-run", "route": "",
+                                               "csrf": csrf(client)})
+    assert response.status_code == 400
+
+
+def test_dry_run_passes_route_and_flag(env):
+    client, tmp_path, argv_file = env
+    fill_person(client, tmp_path)
+    response = client.post("/run/start",
+                           data={"mode": "dry-run", "route": "tatran-ne",
+                                 "csrf": csrf(client)})
+    assert response.status_code == 302
+    argv = wait_for_argv(argv_file)
+    assert "--route" in argv and "tatran-ne" in argv and "--dry-run" in argv
+    assert "--confirm" not in argv
+
+
+def test_confirm_needs_the_confirm_screen_and_passes_flag(env):
+    client, tmp_path, argv_file = env
+    fill_person(client, tmp_path)
+    page = client.post("/run/confirm", data={"mode": "confirm", "route": "",
+                                             "csrf": csrf(client)})
+    body = page.get_data(as_text=True)
+    assert "16:58" in body and "EX 619" in body      # exact dates + train shown
+    response = client.post("/run/start", data={"mode": "confirm", "route": "",
+                                               "csrf": csrf(client)})
+    assert response.status_code == 302
+    argv = wait_for_argv(argv_file)
+    assert "--confirm" in argv and "--route" not in argv
+
+
+def test_status_streams_log(env):
+    client, tmp_path, argv_file = env
+    fill_person(client, tmp_path)
+    client.post("/run/start", data={"mode": "dry-run", "route": "",
+                                    "csrf": csrf(client)})
+    wait_for_argv(argv_file)
+    deadline = time.monotonic() + 10
+    lines = []
+    while time.monotonic() < deadline:
+        status = client.get("/run/status?offset=0").get_json()
+        lines = status["lines"]
+        if not status["running"] and status["returncode"] is not None:
+            break
+        time.sleep(0.05)
+    assert "fake bulk ran" in lines and status["returncode"] == 0
+
+
+def test_second_start_while_running_flashes_busy(env, tmp_path):
+    client, tmp_root, _ = env
+    fill_person(client, tmp_root)
+    slow = tmp_root / "slow.py"
+    slow.write_text("import time; time.sleep(30)")
+    app = client.application
+    app.config["BULK_ARGV"] = [sys.executable, str(slow)]
+    client.post("/run/start", data={"mode": "dry-run", "route": "",
+                                    "csrf": csrf(client)})
+    response = client.post("/run/start", data={"mode": "dry-run", "route": "",
+                                               "csrf": csrf(client)},
+                           follow_redirects=True)
+    assert "beží" in response.get_data(as_text=True)
+    client.post("/run/stop", data={"csrf": csrf(client)})
+
+
+def test_history_lists_ledger_and_debug_files(env):
+    client, tmp_path, _ = env
+    state = tmp_path / "state"
+    (state / "debug").mkdir(parents=True, exist_ok=True)
+    (state / "debug" / "debug-2026-09-07-select_connection-x.png").write_bytes(b"png")
+    (state / "ledger.json").write_text(json.dumps({"entries": {
+        "2026-09-07|16:58|SNV->Košice": {"status": "bought",
+                                          "at": "2026-09-01T12:00:00"}}}))
+    page = client.get("/history").get_data(as_text=True)
+    assert "2026-09-07" in page and "bought" in page
+    assert "debug-2026-09-07-select_connection-x.png" in page
+
+
+def test_debug_file_names_are_whitelisted(env):
+    client, tmp_path, _ = env
+    (tmp_path / "state" / "debug").mkdir(parents=True, exist_ok=True)
+    assert client.get("/debug/../../etc/webui.env").status_code in (400, 404)
+    assert client.get("/debug/evil.txt").status_code == 404

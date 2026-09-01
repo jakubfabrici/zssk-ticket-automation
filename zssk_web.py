@@ -17,10 +17,11 @@ import time
 from pathlib import Path
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
-                   session, url_for, flash)
+                   send_from_directory, session, url_for, flash)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import zssk_bulk
+from zssk_runner import RunnerBusy
 
 DEFAULT_BULK_ARGV = ["/usr/bin/xvfb-run", "-a",
                      "/opt/zssk/.venv/bin/python", "/opt/zssk/zssk_bulk.py"]
@@ -415,6 +416,87 @@ def register_views(app: Flask) -> None:
                 values = {}
             values = dict(values, delay=cfg.get("delay", 45))
         return render_template("settings.html", errors=errors, values=values)
+
+    DEBUG_NAME_RE = re.compile(r"^debug-[A-Za-z0-9._-]+\.(png|html)$")
+
+    def _run_context(app):
+        routes = [r for r in zssk_bulk.load_routes(read_cfg(app)) if r.enabled]
+        return routes, person_ok(app)
+
+    @app.route("/run")
+    def run_page():
+        routes, ready = _run_context(app)
+        status = app.config["RUNNER"].status()
+        return render_template("run.html", routes=routes, ready=ready,
+                               status=status)
+
+    def _selected(app):
+        route_id = request.form.get("route", "")
+        routes, ready = _run_context(app)
+        if route_id:
+            routes = [r for r in zssk_bulk.load_routes(read_cfg(app))
+                      if r.id == route_id] or abort(404)
+        return route_id, routes, ready
+
+    @app.route("/run/confirm", methods=["POST"])
+    def run_confirm():
+        route_id, routes, ready = _selected(app)
+        if not ready:
+            abort(400)
+        preview = [(route, route_overview(app, route)[0]) for route in routes]
+        return render_template("run_confirm.html", preview=preview,
+                               route_id=route_id)
+
+    @app.route("/run/start", methods=["POST"])
+    def run_start():
+        mode = request.form.get("mode", "dry-run")
+        if mode not in ("dry-run", "confirm"):
+            abort(400)
+        route_id, routes, ready = _selected(app)
+        if not ready or not routes:
+            abort(400)
+        argv = list(app.config["BULK_ARGV"]) + [
+            "--config", str(app.config["ROUTES_PATH"])]
+        if route_id:
+            argv += ["--route", route_id]
+        argv.append("--confirm" if mode == "confirm" else "--dry-run")
+        label = ("NÁKUP" if mode == "confirm" else "skúšobný beh")
+        label += f" ({route_id or 'všetky zapnuté trasy'})"
+        try:
+            app.config["RUNNER"].start(argv, label)
+            flash(f"Spustené: {label}")
+        except RunnerBusy as busy:
+            flash(f"Už beží: {busy}. Počkaj, alebo beh zastav.")
+        return redirect(url_for("run_page"))
+
+    @app.route("/run/status")
+    def run_status():
+        offset = request.args.get("offset", 0, type=int)
+        return jsonify(app.config["RUNNER"].status(offset))
+
+    @app.route("/run/stop", methods=["POST"])
+    def run_stop():
+        app.config["RUNNER"].stop()
+        flash("Beh zastavený.")
+        return redirect(url_for("run_page"))
+
+    @app.route("/history")
+    def history():
+        cfg = read_cfg(app)
+        ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
+        entries = sorted(ledger.entries.items(),
+                         key=lambda item: item[1].get("at", ""), reverse=True)
+        directory = debug_dir(app, cfg)
+        dumps = sorted((p.name for p in directory.glob("debug-*")
+                        if DEBUG_NAME_RE.fullmatch(p.name)), reverse=True) \
+            if directory.exists() else []
+        return render_template("history.html", entries=entries, dumps=dumps)
+
+    @app.route("/debug/<path:name>")
+    def debug_file(name):
+        if not DEBUG_NAME_RE.fullmatch(name):
+            abort(404)
+        return send_from_directory(debug_dir(app, read_cfg(app)), name)
 
 
 if __name__ == "__main__":

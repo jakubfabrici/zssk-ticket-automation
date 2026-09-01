@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Beh{% endblock %}
+{% block content %}
+<h1>Beh</h1>
+{% if not ready %}
+<p class="error">Najprv vyplň osobné údaje v <a href="{{ url_for('settings') }}">Nastaveniach</a>.
+   Bez nich sa nedá spustiť ani skúšobný beh.</p>
+{% endif %}
+<form method="post" action="{{ url_for('run_start') }}" class="inline">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="mode" value="dry-run">
+  <label>Trasa
+    <select name="route">
+      <option value="">všetky zapnuté trasy</option>
+      {% for route in routes %}
+      <option value="{{ route.id }}">{{ route.name }} ({{ route.trip.time }})</option>
+      {% endfor %}
+    </select></label>
+  <button type="submit" {{ '' if ready else 'disabled' }}>Skúšobný beh</button>
+</form>
+<form method="post" action="{{ url_for('run_confirm') }}" class="inline"
+      onsubmit="this.route.value = document.querySelector('select[name=route]').value">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="mode" value="confirm">
+  <input type="hidden" name="route" value="">
+  <button type="submit" class="danger" {{ '' if ready else 'disabled' }}>Kúpiť…</button>
+</form>
+<form method="post" action="{{ url_for('run_stop') }}" class="inline">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <button type="submit">Zastaviť</button>
+</form>
+<p id="state">{{ 'beží: ' + status.label if status.running else 'žiadny beh' }}</p>
+<pre id="log"></pre>
+<script>
+let off = 0;
+async function poll() {
+  const response = await fetch('{{ url_for("run_status") }}?offset=' + off);
+  const status = await response.json();
+  off = status.next_offset;
+  if (status.lines.length) {
+    const pre = document.getElementById('log');
+    pre.textContent += status.lines.join('\n') + '\n';
+    pre.scrollTop = pre.scrollHeight;
+  }
+  document.getElementById('state').textContent =
+    status.running ? 'beží: ' + status.label
+                   : (status.returncode === null ? 'žiadny beh'
+                      : 'skončil s kódom ' + status.returncode);
+}
+setInterval(poll, 2000); poll();
+</script>
+{% endblock %}

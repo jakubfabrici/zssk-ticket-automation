@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Potvrdenie nákupu{% endblock %}
+{% block content %}
+<h1>Naozaj kúpiť?</h1>
+<p class="error">Toto reálne objedná lístky na všetky dátumy nižšie.</p>
+{% for route, days in preview %}
+<div class="card">
+  <h2>{{ route.name }}: {{ route.trip.departure }} → {{ route.trip.arrival }}
+      o {{ route.trip.time }}
+      {% if route.trip.train %} · vlak {{ route.trip.train }}{% endif %}</h2>
+  {% if days %}
+  <ul>{% for day in days %}<li>{{ day.isoformat() }}</li>{% endfor %}</ul>
+  {% else %}<p>Nič na kúpu (všetko už je v evidencii).</p>{% endif %}
+</div>
+{% endfor %}
+<form method="post" action="{{ url_for('run_start') }}">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="mode" value="confirm">
+  <input type="hidden" name="route" value="{{ route_id }}">
+  <button type="submit" class="danger">Áno, kúpiť</button>
+  <a href="{{ url_for('run_page') }}"><button type="button">Späť</button></a>
+</form>
+{% endblock %}

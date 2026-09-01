@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}História{% endblock %}
+{% block content %}
+<h1>História</h1>
+{% if not entries %}<p>Evidencia je zatiaľ prázdna.</p>{% endif %}
+{% if entries %}
+<table>
+  <tr><th>Kľúč</th><th>Stav</th><th>Kedy</th><th>Detail</th></tr>
+  {% for key, entry in entries %}
+  <tr><td>{{ key }}</td><td>{{ entry.status }}</td><td>{{ entry.at }}</td>
+      <td>{{ entry.get('step', '') }} {{ entry.get('detail', '') }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+<h2>Záznamy zo zlyhaní</h2>
+{% if not dumps %}<p>Žiadne.</p>{% endif %}
+<ul>{% for name in dumps %}
+  <li><a href="{{ url_for('debug_file', name=name) }}">{{ name }}</a></li>
+{% endfor %}</ul>
+{% endblock %}
