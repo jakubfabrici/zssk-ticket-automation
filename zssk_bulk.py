@@ -532,6 +532,38 @@ def click(driver, step: str, timeout: float = 15.0) -> None:
 # checkout flow
 # --------------------------------------------------------------------------
 
+def pick_from_dropdown(driver, toggle_step: str, option_step: str,
+                       timeout: float = 20.0) -> None:
+    """Open toggle_step's dropdown as needed and click option_step.
+
+    The passenger panel re-renders over AJAX after every selection and
+    sometimes closes the list mid-sequence; a blind toggle-then-option pair
+    then misses. Loop: pick the option when visible, otherwise (re)open the
+    toggle and try again.
+    """
+    deadline = time.monotonic() + timeout
+    last = ""
+    while time.monotonic() < deadline:
+        for by, value in SELECTORS[option_step]:
+            try:
+                for element in driver.find_elements(by, value):
+                    if element.is_displayed():
+                        try:
+                            element.click()
+                        except WebDriverException:
+                            driver.execute_script("arguments[0].click();", element)
+                        log.debug("picked %s", option_step)
+                        return
+            except WebDriverException as exc:
+                last = str(exc).splitlines()[0]
+        try:
+            click(driver, toggle_step, timeout=3)
+        except StepFailed:
+            pass
+        time.sleep(0.6)
+    raise StepFailed(option_step, last or "option never became visible")
+
+
 def ensure_checked(driver, step: str, timeout: float = 15.0) -> None:
     """Make sure `step`'s checkbox ends up CHECKED, clicking only when needed.
 
@@ -855,10 +887,8 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     # Passenger: "Mladý (16 - 25 r.)" with "Preukaz pre žiaka/Študenta" and the
     # free-transport entitlement ticked -- that combination is what makes the
     # fare zero.
-    click(driver, "passenger_type")
-    click(driver, "passenger_young")
-    click(driver, "card_type")
-    click(driver, "card_student")
+    pick_from_dropdown(driver, "passenger_type", "passenger_young")
+    pick_from_dropdown(driver, "card_type", "card_student")
     ensure_checked(driver, "free_transport")
 
     # Live flow 2026-09: the passenger card asks for the traveller identity
