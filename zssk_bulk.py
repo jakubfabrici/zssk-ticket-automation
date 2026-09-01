@@ -26,6 +26,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -69,11 +70,14 @@ class Trip:
     arrival: str
     time: str                        # "HH:MM"
     weekdays: tuple[int, ...] = ()    # 0 = Monday; empty means every day
+    train: str | None = None          # e.g. "EX 619" or "Tatran"; None = match by time
 
     def matches(self, day: dt.date) -> bool:
         return not self.weekdays or day.weekday() in self.weekdays
 
     def key(self, day: dt.date) -> str:
+        # train is deliberately NOT part of the key: adding it would orphan
+        # every entry an existing ledger already holds.
         return f"{day.isoformat()}|{self.time}|{self.departure}->{self.arrival}"
 
 
@@ -373,27 +377,60 @@ def set_readonly(driver, step: str, value: str) -> None:
     )
 
 
-def select_connection(driver, departure_time: str, timeout: float = 20.0):
-    """Click the result whose departure time is the one we commute on.
+def _squash(text: str) -> str:
+    """Lowercase, all whitespace removed: "EX 619", "ex619", "Ex  619" compare equal."""
+    return re.sub(r"\s+", "", text).lower()
 
-    Upstream took whatever was first in the list, which on a delayed or
-    cancelled train silently buys a ticket for a different service.
+
+def pick_connection(row_texts: list[str], departure_time: str,
+                    train: str | None) -> int | None:
+    """Index of the connection row to buy, or None.
+
+    A train label wins over the departure time: when the timetable shifts a few
+    minutes, the labelled service is still the right one. The fallback is the
+    exact departure time as its own whitespace-separated token, which is the
+    pre-train behaviour.
     """
-    rows = (
-        "//*[contains(@id,'eSalesConnectionLoop') or contains(@class,'connection')]"
-        f"[.//*[normalize-space(text())='{departure_time}']]"
-    )
+    if train:
+        wanted = _squash(train)
+        for index, text in enumerate(row_texts):
+            if wanted in _squash(text):
+                return index
+    for index, text in enumerate(row_texts):
+        if departure_time in text.split():
+            return index
+    return None
+
+
+CONNECTION_ROWS_XPATH = (
+    "//*[contains(@id,'eSalesConnectionLoop') or contains(@class,'connection')]"
+)
+
+
+def select_connection(driver, departure_time: str, train: str | None = None,
+                      timeout: float = 20.0):
+    """Click the result for the service we commute on.
+
+    Prefers the train label when the trip carries one and falls back to the
+    exact departure time -- see pick_connection. Upstream took whatever was
+    first in the list, which on a delayed or cancelled train silently buys a
+    ticket for a different service.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            for row in driver.find_elements(BY_XPATH, rows):
-                if row.is_displayed():
-                    row.click()
-                    return row
+            rows = [row for row in driver.find_elements(BY_XPATH, CONNECTION_ROWS_XPATH)
+                    if row.is_displayed()]
+            index = pick_connection([row.text for row in rows], departure_time, train)
+            if index is not None:
+                rows[index].click()
+                return rows[index]
         except WebDriverException:
             pass
         time.sleep(0.4)
-    raise StepFailed("select_connection", f"no result departing at {departure_time}")
+    wanted = (f"train {train!r} or time {departure_time}" if train
+              else f"time {departure_time}")
+    raise StepFailed("select_connection", f"no result matching {wanted}")
 
 
 def dump_state(driver, tag: str, directory: Path) -> Path | None:
@@ -429,7 +466,7 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     set_readonly(driver, "time", trip.time)
     click(driver, "search")
 
-    select_connection(driver, trip.time)
+    select_connection(driver, trip.time, trip.train)
     click(driver, "buy")
 
     # Passenger: "Mladý (16 - 25 r.)" with "Preukaz pre žiaka/Študenta" and the
