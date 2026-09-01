@@ -410,6 +410,10 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
         (BY_XPATH, "//input[contains(@id,'cislo-registracie')]"),
         (BY_XPATH, "//input[contains(@id,'registracie')]"),
     ],
+    "pax_reveal": [
+        (BY_XPATH, "//a[contains(normalize-space(.),'Vyhľadanie zliav v ZSSK konte')]"),
+        (BY_CSS, "a.ageCategory-filter-block-extend"),
+    ],
     "pax_first_name": [(BY_CSS, "input[id$=':firstname']")],
     "pax_last_name": [(BY_CSS, "input[id$=':lastname']")],
     "pax_account_id": [(BY_CSS, "input[id$=':accountId']")],
@@ -639,6 +643,48 @@ def select_connection(driver, departure_time: str, train: str | None = None,
     raise StepFailed("select_connection", f"no result matching {wanted}")
 
 
+def _page_fingerprint(driver) -> str:
+    try:
+        elements = driver.find_elements(BY_CSS, "input[name='javax.faces.ViewState']")
+        if elements:
+            return elements[0].get_attribute("value") or driver.current_url
+    except WebDriverException:
+        pass
+    try:
+        return driver.current_url
+    except WebDriverException:
+        return ""
+
+
+def click_continue(driver, timeout: float = 25.0) -> None:
+    """Click the continue button and WAIT until the page really moved on.
+
+    The live shop is a mojarra/AJAX app: the button stays in the DOM after a
+    click, so firing the next click immediately re-posts the same step. Four
+    instant re-posts is exactly what produced the /exception dead end. A step
+    counts as done when the JSF ViewState changes, the URL changes, or the
+    clicked button goes stale.
+    """
+    element = find(driver, "continue")
+    before = _page_fingerprint(driver)
+    try:
+        element.click()
+    except WebDriverException:
+        driver.execute_script("arguments[0].click();", element)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _page_fingerprint(driver) != before:
+            log.debug("continue advanced")
+            return
+        try:
+            element.is_enabled()
+        except WebDriverException:
+            log.debug("continue advanced (stale button)")
+            return
+        time.sleep(0.3)
+    log.warning("continue: no visible page change within %.0fs", timeout)
+
+
 def dump_state(driver, tag: str, directory: Path) -> Path | None:
     """Screenshot + page source, so a broken step is diagnosable afterwards."""
     # mode=0o700: these dumps carry personal data, and a directory the code
@@ -691,17 +737,18 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     # identification type) and verifies the entitlement via a filter button.
     # All optional so the offline mock, which models the older layout,
     # keeps working unchanged.
-    if fill_if_present(driver, "pax_first_name", person.name):
+    if click_if_present(driver, "pax_reveal"):
+        fill_if_present(driver, "pax_account_id", person.train_card, timeout=8)
+        fill_if_present(driver, "pax_first_name", person.name)
         fill_if_present(driver, "pax_last_name", person.surname)
-        fill_if_present(driver, "pax_account_id", person.train_card)
         if click_if_present(driver, "pax_filter"):
             note = wait_text(driver, "pax_filter_result")
             log.info("passenger filter result: %s", note or "(bez textu)")
 
-    click(driver, "continue")          # Voľba cestujúcich
-    click(driver, "continue")          # Voľba cestovného lístka
-    click(driver, "continue")          # Doplnkové služby
-    click(driver, "continue")          # Obsah košíka
+    click_continue(driver)             # Voľba cestujúcich
+    click_continue(driver)             # Voľba cestovného lístka
+    click_continue(driver)             # Doplnkové služby
+    click_continue(driver)             # Obsah košíka
 
     element = find(driver, "email")
     element.clear()
@@ -713,9 +760,9 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
                         ("registration", person.train_card)):
         fill_if_present(driver, step, value)
 
-    click(driver, "continue")          # Osobné údaje
+    click_continue(driver)             # Osobné údaje
     click(driver, "terms")
-    click(driver, "continue")          # Výber platby
+    click_continue(driver)             # Výber platby
 
     if dry_run:
         log.info("dry run: stopping at the summary without confirming")
