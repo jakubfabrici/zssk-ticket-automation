@@ -896,8 +896,11 @@ def main(argv: list[str] | None = None) -> int:
         if settings["start"] else None
     )
     ledger = Ledger.load(settings["ledger"])
+    cap = int(settings["max"]) if settings["max"] else None
+    # The global cap is applied only AFTER dropping today's already-departed
+    # trains, or --max N could spend its whole budget on unbuyable dates.
     work = build_work(routes, ledger, dt.date.today(), settings["horizon_days"],
-                      start, int(settings["max"]) if settings["max"] else None)
+                      start, None)
 
     now = dt.datetime.now()
     departed = [(route, day) for route, day in work
@@ -907,6 +910,8 @@ def main(argv: list[str] | None = None) -> int:
                  route.id, day.isoformat(), route.trip.time)
     if departed:
         work = [item for item in work if item not in departed]
+    if cap:
+        work = work[:cap]
 
     for route in routes:
         count = sum(1 for r, _ in work if r.id == route.id)
