@@ -410,6 +410,11 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
         (BY_XPATH, "//input[contains(@id,'cislo-registracie')]"),
         (BY_XPATH, "//input[contains(@id,'registracie')]"),
     ],
+    "pax_first_name": [(BY_CSS, "input[id$=':firstname']")],
+    "pax_last_name": [(BY_CSS, "input[id$=':lastname']")],
+    "pax_account_id": [(BY_CSS, "input[id$=':accountId']")],
+    "pax_filter": [(BY_CSS, "[id$=':filterButton']")],
+    "pax_filter_result": [(BY_CSS, "[id$=':filterResult']")],
     "terms": [
         (BY_XPATH, "//label[contains(normalize-space(.),'obchodnými podmienkami')]"),
         (BY_XPATH, "//label[contains(normalize-space(.),'podmienkami')]"),
@@ -486,6 +491,48 @@ def ensure_checked(driver, step: str, timeout: float = 15.0) -> None:
     except WebDriverException:
         driver.execute_script("arguments[0].click();", element)
     log.debug("clicked %s", step)
+
+
+def fill_if_present(driver, step: str, value: str, timeout: float = 3.0) -> bool:
+    """Fill `step` when the page has it; absent means an older page layout."""
+    try:
+        element = find(driver, step, timeout)
+    except StepFailed:
+        log.debug("%s not on this page, skipping", step)
+        return False
+    element.clear()
+    element.send_keys(value)
+    log.debug("filled %s", step)
+    return True
+
+
+def click_if_present(driver, step: str, timeout: float = 3.0) -> bool:
+    try:
+        click(driver, step, timeout)
+        return True
+    except StepFailed:
+        log.debug("%s not on this page, skipping", step)
+        return False
+
+
+def wait_text(driver, step: str, timeout: float = 12.0) -> str:
+    """First non-empty text any candidate of `step` shows, or "" on timeout.
+
+    Visibility is deliberately not required: AJAX result panels often carry
+    text before their reveal animation finishes.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for by, value in SELECTORS[step]:
+            try:
+                for element in driver.find_elements(by, value):
+                    text = (element.get_attribute("textContent") or "").strip()
+                    if text:
+                        return text
+            except WebDriverException:
+                pass
+        time.sleep(0.4)
+    return ""
 
 
 def fill_station(driver, step: str, value: str) -> None:
@@ -638,20 +685,33 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     click(driver, "card_type")
     click(driver, "card_student")
     ensure_checked(driver, "free_transport")
+
+    # Live flow 2026-09: the passenger card asks for the traveller identity
+    # up front (name, surname, ZSSK konto number preselected as the
+    # identification type) and verifies the entitlement via a filter button.
+    # All optional so the offline mock, which models the older layout,
+    # keeps working unchanged.
+    if fill_if_present(driver, "pax_first_name", person.name):
+        fill_if_present(driver, "pax_last_name", person.surname)
+        fill_if_present(driver, "pax_account_id", person.train_card)
+        if click_if_present(driver, "pax_filter"):
+            note = wait_text(driver, "pax_filter_result")
+            log.info("passenger filter result: %s", note or "(bez textu)")
+
     click(driver, "continue")          # Voľba cestujúcich
     click(driver, "continue")          # Voľba cestovného lístka
     click(driver, "continue")          # Doplnkové služby
     click(driver, "continue")          # Obsah košíka
 
-    for step, value in (
-        ("email", person.email),
-        ("first_name", person.name),
-        ("last_name", person.surname),
-        ("registration", person.train_card),
-    ):
-        element = find(driver, step)
-        element.clear()
-        element.send_keys(value)
+    element = find(driver, "email")
+    element.clear()
+    element.send_keys(person.email)
+    # On the live 2026-09 flow the identity is already bound on the passenger
+    # card, so these later fields may legitimately be gone.
+    for step, value in (("first_name", person.name),
+                        ("last_name", person.surname),
+                        ("registration", person.train_card)):
+        fill_if_present(driver, step, value)
 
     click(driver, "continue")          # Osobné údaje
     click(driver, "terms")
