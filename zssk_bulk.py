@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import fcntl
 import json
 import logging
 import os
@@ -593,7 +594,7 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
 # --------------------------------------------------------------------------
 
 def make_driver(headless: bool, binary: str | None, geckodriver: str | None,
-                profile_dir: str | None):
+                profile_dir: str | None, download_dir: str | None = None):
     """A Firefox driver, optionally reusing a profile between runs."""
     from selenium import webdriver
     from selenium.webdriver.firefox.options import Options
@@ -614,6 +615,11 @@ def make_driver(headless: bool, binary: str | None, geckodriver: str | None,
     options.set_preference("browser.download.folderList", 2)
     options.set_preference("browser.helperApps.neverAsk.saveToDisk",
                            "application/octet-stream,application/pdf")
+    if download_dir:
+        # folderList=2 means "use browser.download.dir"; upstream set the first
+        # half and never the directory, so downloads landed nowhere defined.
+        Path(download_dir).mkdir(parents=True, exist_ok=True)
+        options.set_preference("browser.download.dir", download_dir)
 
     service = Service(executable_path=geckodriver) if geckodriver else Service()
     driver = webdriver.Firefox(options=options, service=service)
@@ -662,6 +668,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weekdays", "-w",
                         help='Which days to buy, e.g. "mon,tue,wed,thu,fri" or "po,ut". '
                              "Default: every day in the window.")
+    parser.add_argument("--train",
+                        help='Preferred train label, e.g. "EX 619" or "Tatran". '
+                             "Falls back to --time when no result carries it.")
+    parser.add_argument("--route", "-r", default=None,
+                        help="Route id from a routes config; default: every enabled route.")
     parser.add_argument("--horizon-days", type=int, default=None,
                         help=f"How far ahead to buy (max {BOOKING_HORIZON_DAYS}, the "
                              "e-shop's own limit).")
@@ -676,6 +687,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Purchase ledger (default tickets.json next to this script).")
     parser.add_argument("--debug-dir", default=None,
                         help=f"Where failure dumps go (default {here}).")
+    parser.add_argument("--download-dir", default=None,
+                        help="Directory Firefox saves files into.")
 
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--list", action="store_true",
@@ -725,13 +738,10 @@ def resolve_settings(args, config: dict) -> dict:
         "person": pick("person", str(here / "person.txt")),
         "ledger": pick("ledger", str(here / "tickets.json")),
         "debug_dir": pick("debug_dir", str(here)),
+        "train": pick("train"),
+        "download_dir": pick("download_dir", None),
+        "profile_dir": pick("profile_dir", None),
     }
-    missing = [k for k in ("departure", "arrival", "time") if not settings[k]]
-    if missing:
-        raise SystemExit(
-            "missing required setting(s): " + ", ".join(missing)
-            + " -- pass them on the command line or put them in --config"
-        )
     return settings
 
 
@@ -748,6 +758,39 @@ def summarise(results: list[tuple[dt.date, str, str]]) -> str:
     return "\n".join(lines)
 
 
+def acquire_run_lock(ledger_path: str):
+    """One purchase run at a time, across every entry point (web, timer, CLI).
+
+    The lock file sits next to the ledger, because the ledger is what two
+    concurrent runs would break: both read it before either writes, and the
+    same date gets bought twice. flock conflicts even between two file
+    descriptors of one process, so the unit test can prove it in-process.
+    The caller keeps the returned file object alive until the process exits.
+    """
+    lock_file = Path(str(ledger_path) + ".lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_file, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise SystemExit(
+            f"another purchase run is already in progress (lock {lock_file})")
+    return handle
+
+
+def build_work(routes: list[Route], ledger: Ledger, today: dt.date,
+               horizon_days: int, start: dt.date | None,
+               cap: int | None) -> list[tuple[Route, dt.date]]:
+    """Everything to buy, grouped by route, capped globally by --max."""
+    work: list[tuple[Route, dt.date]] = []
+    for route in routes:
+        for day in plan_dates(route.trip, today, horizon_days,
+                              ledger.bought(), start, route.max):
+            work.append((route, day))
+    return work[:cap] if cap else work
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -755,36 +798,64 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    settings = resolve_settings(args, load_config(args.config))
+    config = load_config(args.config)
+    settings = resolve_settings(args, config)
 
-    trip = Trip(
-        departure=settings["departure"],
-        arrival=settings["arrival"],
-        time=settings["time"],
-        weekdays=parse_weekdays(settings["weekdays"]) if settings["weekdays"] else (),
-    )
+    if args.departure or args.arrival or args.time:
+        # Legacy single-trip mode, exactly as before --route existed.
+        if args.route:
+            raise SystemExit("--route cannot be combined with --departure/--arrival/--time")
+        missing = [k for k in ("departure", "arrival", "time") if not settings[k]]
+        if missing:
+            raise SystemExit(
+                "missing required setting(s): " + ", ".join(missing)
+                + " -- pass them on the command line or put them in --config"
+            )
+        trip = Trip(
+            departure=settings["departure"], arrival=settings["arrival"],
+            time=settings["time"],
+            weekdays=parse_weekdays(settings["weekdays"]) if settings["weekdays"] else (),
+            train=settings["train"] or None,
+        )
+        routes = [Route(id="cli", name=f"{trip.departure} -> {trip.arrival}",
+                        trip=trip)]
+    else:
+        routes = select_routes(load_routes(config), args.route)
+        if not routes:
+            raise SystemExit("no enabled routes in the config -- enable one, add one, "
+                             "or pass --route <id>")
+
     start = (
         dt.datetime.strptime(settings["start"], "%d.%m.%Y").date()
         if settings["start"] else None
     )
     ledger = Ledger.load(settings["ledger"])
-    days = plan_dates(
-        trip,
-        today=dt.date.today(),
-        horizon_days=settings["horizon_days"],
-        already=ledger.bought(),
-        start=start,
-        limit=int(settings["max"]) if settings["max"] else None,
-    )
+    work = build_work(routes, ledger, dt.date.today(), settings["horizon_days"],
+                      start, int(settings["max"]) if settings["max"] else None)
 
-    log.info("%s -> %s at %s: %d date(s) to buy, %d already in the ledger",
-             trip.departure, trip.arrival, trip.time, len(days), len(ledger.bought()))
-    if args.list or not days:
-        for day in days:
-            print(f"{day.isoformat()}  {day.strftime('%a')}  {zssk_date(day)}  {trip.time}")
+    for route in routes:
+        count = sum(1 for r, _ in work if r.id == route.id)
+        label = f" ({route.trip.train})" if route.trip.train else ""
+        log.info("%s: %s -> %s at %s%s: %d date(s) to buy", route.id,
+                 route.trip.departure, route.trip.arrival, route.trip.time,
+                 label, count)
+    log.info("%d already in the ledger", len(ledger.bought()))
+
+    if args.list or not work:
+        current = None
+        for route, day in work:
+            if route.id != current:
+                current = route.id
+                extra = f", train {route.trip.train}" if route.trip.train else ""
+                print(f"== {route.name} ({route.id}): {route.trip.departure} -> "
+                      f"{route.trip.arrival} at {route.trip.time}{extra} ==")
+            print(f"{day.isoformat()}  {day.strftime('%a')}  {zssk_date(day)}  "
+                  f"{route.trip.time}")
         return 0
 
     person = load_person(settings["person"])
+    run_lock = acquire_run_lock(settings["ledger"])   # held until process exit
+    assert run_lock is not None
     dry_run = not args.confirm
     if dry_run:
         log.info("dry run: the checkout is filled in but no order is confirmed "
@@ -794,38 +865,40 @@ def main(argv: list[str] | None = None) -> int:
     results: list[tuple[dt.date, str, str]] = []
     consecutive_failures = 0
     driver = make_driver(args.headless, args.browser_binary, args.geckodriver,
-                         args.profile_dir)
+                         settings["profile_dir"], settings["download_dir"])
     try:
-        for index, day in enumerate(days):
+        for index, (route, day) in enumerate(work):
             if index:
                 log.info("waiting %.0fs before the next purchase", settings["delay"])
                 time.sleep(settings["delay"])
-            log.info("[%d/%d] %s %s", index + 1, len(days), day.isoformat(), trip.time)
+            log.info("[%d/%d] %s %s %s", index + 1, len(work), route.id,
+                     day.isoformat(), route.trip.time)
             try:
-                status = buy_one(driver, trip, day, person, settings["url"], dry_run)
+                status = buy_one(driver, route.trip, day, person,
+                                 settings["url"], dry_run)
             except Exception as exc:
-                # StepFailed carries the step it broke on; anything else (a
-                # WebDriver crash, a timeout) is reported under its own name.
                 step = getattr(exc, "step", type(exc).__name__)
                 detail = str(exc).splitlines()[0][:120]
                 dump_state(driver, f"{day.isoformat()}-{step}", debug_dir)
                 if not dry_run:
-                    ledger.record(trip.key(day), "failed", step=step, detail=detail)
+                    ledger.record(route.trip.key(day), "failed",
+                                  step=step, detail=detail)
                 results.append((day, "failed", f"{step}: {detail}"))
                 consecutive_failures += 1
                 log.error("%s failed at %s: %s", day.isoformat(), step, detail)
                 if args.stop_on_error:
                     break
                 if consecutive_failures >= args.max_consecutive_failures:
-                    log.error("%d failures in a row -- stopping so we do not hammer the site",
-                              consecutive_failures)
+                    log.error("%d failures in a row -- stopping so we do not "
+                              "hammer the site", consecutive_failures)
                     break
                 continue
 
             consecutive_failures = 0
             if status == "bought":
-                ledger.record(trip.key(day), "bought", time=trip.time,
-                              departure=trip.departure, arrival=trip.arrival)
+                ledger.record(route.trip.key(day), "bought", time=route.trip.time,
+                              departure=route.trip.departure,
+                              arrival=route.trip.arrival)
             results.append((day, status, ""))
             log.info("%s %s", day.isoformat(), status)
     finally:
