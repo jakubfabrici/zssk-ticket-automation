@@ -1,0 +1,13 @@
+# Passenger data for buy.py. Upstream format: key = 'value' (values are parsed
+# as string literals, never executed). Keep the real file at mode 0600 --
+# it holds personal data.
+
+name = 'Meno'
+surname = 'Priezvisko'
+email = 'meno.priezvisko@example.com'
+
+# "Číslo registrácie" on the personal-data step: the ZSSK registration number
+# that carries the activated student (100 %) discount. It comes from the ZSSK
+# account / card registration -- it is not necessarily the number printed on
+# the ISIC itself.
+train_card = '1234567'
