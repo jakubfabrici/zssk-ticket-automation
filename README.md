@@ -15,12 +15,18 @@ pve  ──►  LXC 121 "zssk" (Debian, 1 GB, nesting=1)
 ## Read this before you rely on it
 
 * **Upstream is from July 2019 and has not been touched since.** It clicks its
-  way through `ikvc.slovakrail.sk/esales` using absolute XPaths and generated
-  JSF ids (`j_idt261`, …). Those break whenever ZSSK reskins the e-shop, and
-  ZSSK has reworked its sales channels since. The patch in `patches/` fixes the
-  *runtime* (Selenium 4, Python 3.12+), **not** the selectors — expect to
-  re-map them. Always do a `--stop-before-pay` run first and look at the
-  screenshot it drops in `/opt/zssk/debug-*`.
+  way through the e-shop using absolute XPaths and generated JSF ids
+  (`j_idt261`, …), which break whenever ZSSK redeploys. The patch in
+  `patches/` fixes the runtime *and* everything on the search page that was
+  checked against the live site (see below) — but the steps after the search
+  are still upstream's 2019 ids and are **unverified**. Always do a
+  `--stop-before-pay` run first and look at the screenshot it drops in
+  `/opt/zssk/debug-*`.
+* **The site sits behind F5 Shape bot defense** (the `/TSPD/…` script on every
+  page). Expect headless Firefox from a datacenter IP to be reset outright; a
+  normal-looking run from the LAN (`-F`, non-headless) has a much better
+  chance. Automated checkout is also not something ZSSK's terms invite, so
+  keep it to your own free ticket and don't hammer it.
 * **For regional trains you may not need a ticket at all.** Since 1 August,
   passengers with a 100 % discount no longer need a zero ticket on **Os and REX**
   trains — a valid document with the discount activated, shown to the
@@ -72,9 +78,38 @@ pct exec 121 -- env DEPARTURE="Košice" ARRIVAL="Spišská Nová Ves" /opt/zssk/
 Any flag you pass wins over the default; everything is forwarded to `buy.py`
 (`--hold N` keeps the browser open longer, `-F` runs it non-headless).
 
+## What was checked against the live site (1 Sep 2026)
+
+* `ikvc.slovakrail.sk` **no longer serves the e-sales app** — it resolves to
+  the same address as `www.zssk.sk` and presents a certificate for
+  `CN=www.zssk.sk` that does not cover it, so upstream's URL fails TLS before
+  it loads anything. The application moved to **`https://predaj.zssk.sk/`**
+  (`/search`, `/refund`); it is the same JSF app, still serving
+  `ikvc-scripts.js`.
+* All six search-page ids upstream depends on are still there:
+  `searchPanel`, `fromInput`, `toInput`, `departDate`, `departTime`,
+  `actionSearchConnectionButton` — plus stable `data-cy` attributes
+  (`stationFrom`, `stationTo`, `search`) that are better anchors if these ever
+  move.
+* The page title is now `Vyhľadanie spojenia`, so upstream's
+  `assert 'ZSSK' in driver.title` fails immediately.
+* `departDate` is `readonly` (a bootstrap datepicker) and renders as
+  `1. 9. 2026`, so upstream's `send_keys("18.03.2019")` cannot fill it.
+* The station fields are `bootstrap3-typeahead` inputs: a typed value only
+  counts once a suggestion from the dropdown is picked.
+* Everything past the search button could not be exercised from here — the bot
+  defense resets browser connections from this network — so the passenger,
+  cart, personal-data and payment steps still carry upstream's 2019 ids.
+
 ## What the patch changes
 
 `patches/0001-modernize-selenium4-python3.patch`, against upstream `a6bcffd`:
+
+* base URL → `https://predaj.zssk.sk/search`, overridable with `--url`
+* `assert 'ZSSK' in driver.title` → a warning against the real title
+* station fields filled through the typeahead dropdown instead of an absolute
+  XPath into the old DOM
+* the readonly date field set via JS in the `D. M. YYYY` format the form uses
 
 * `find_element_by_id/_by_xpath` → `find_element(By.ID/By.XPATH, …)` (removed in Selenium 4)
 * `FirefoxProfile` + `options.headless` → `options.set_preference` / `-headless`
@@ -88,7 +123,8 @@ Any flag you pass wins over the default; everything is forwarded to `buy.py`
 
 | symptom | cause |
 | --- | --- |
-| `NoSuchElementException` on a long XPath | ZSSK changed the page; re-map that selector against the dumped `debug-*.html` |
+| `NoSuchElementException` on a long XPath | one of the unverified post-search steps; re-map it against the dumped `debug-*.html` |
+| connection reset / blank page | bot defense; try `-F` (non-headless) and a non-datacenter IP |
 | Firefox fails to start in the LXC | container needs `--features nesting=1` (bootstrap sets it) |
 | `geckodriver` not found | rerun `install.sh`, or set `GECKODRIVER_VERSION` |
 | the run stops on personal data | `person.txt` fields are empty or the registration number is wrong |
