@@ -1,0 +1,55 @@
+<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<title>Vyhľadanie spojenia</title><script src="_mock.js"></script></head>
+<body>
+<div id="searchPanel">
+  <h1>Vyhľadanie spojenia</h1>
+  <form id="searchParamForm" onsubmit="return false">
+    <label for="fromInput">Odkiaľ</label>
+    <input id="fromInput" name="fromInput" type="text" autocomplete="off" data-cy="stationFrom">
+    <ul class="typeahead dropdown-menu" id="fromList" style="display:none"></ul>
+
+    <label for="toInput">Kam</label>
+    <input id="toInput" name="toInput" type="text" autocomplete="off" data-cy="stationTo">
+    <ul class="typeahead dropdown-menu" id="toList" style="display:none"></ul>
+
+    <input id="departDate" name="departDate" type="text" readonly="readonly" value="1. 9. 2026">
+    <input id="departTime" name="departTime" type="text" readonly="readonly">
+    <input id="actionSearchConnectionButton" data-cy="search" type="submit"
+           value="Vyhľadať spojenie" onclick="submitSearch()">
+  </form>
+</div>
+<script>
+// bootstrap3-typeahead behaviour: a typed value only counts once a suggestion
+// from the dropdown is picked.
+function wire(inputId, listId) {
+  var input = document.getElementById(inputId), list = document.getElementById(listId);
+  input.addEventListener('input', function () {
+    list.innerHTML = '';
+    if (!input.value) { list.style.display = 'none'; return; }
+    var li = document.createElement('li'), a = document.createElement('a');
+    a.textContent = input.value;
+    a.href = '#';
+    a.onclick = function () {
+      input.value = a.textContent;
+      input.dataset.picked = '1';
+      list.style.display = 'none';
+      return false;
+    };
+    li.appendChild(a); list.appendChild(li); list.style.display = 'block';
+  });
+}
+wire('fromInput', 'fromList'); wire('toInput', 'toList');
+
+function submitSearch() {
+  var from = document.getElementById('fromInput'), to = document.getElementById('toInput');
+  if (!from.dataset.picked || !to.dataset.picked) {
+    document.body.innerHTML = '<p id="rejected">Zvoľte stanicu zo zoznamu.</p>';
+    return;
+  }
+  remember('from', from.value); remember('to', to.value);
+  remember('date', document.getElementById('departDate').value);
+  remember('time', document.getElementById('departTime').value);
+  location.href = 'results.html';
+}
+</script>
+</body></html>

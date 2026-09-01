@@ -1,0 +1,9 @@
+{
+  "departure": "Spišská Nová Ves",
+  "arrival": "Košice",
+  "time": "07:12",
+  "weekdays": "mon,tue,wed,thu,fri",
+  "horizon_days": 60,
+  "delay": 45,
+  "url": "https://predaj.zssk.sk/search"
+}

@@ -1,0 +1,14 @@
+<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<title>Výber platby (3)</title><script src="_mock.js"></script></head>
+<body><h1>Výber platby (3)</h1>
+<label for="terms">Súhlasím s obchodnými podmienkami</label>
+<input type="checkbox" id="terms">
+<input type="submit" value="Pokračovať" onclick="location.href='summary.html'">
+<script>
+document.querySelector('label[for=terms]').addEventListener('click', function () {
+  var box = document.getElementById('terms');
+  box.checked = !box.checked;
+  remember('terms', box.checked);
+});
+</script>
+</body></html>

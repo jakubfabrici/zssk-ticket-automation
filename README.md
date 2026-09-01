@@ -1,16 +1,59 @@
 # ZSSK ticket automation on Proxmox
 
-Deploys [`europ/zssk-ticket-automation`](https://github.com/europ/zssk-ticket-automation)
-— a Selenium script that fills in the ZSSK e-sales checkout for a **free
-(100 % discount) ticket** — into a dedicated LXC container, with a wrapper
-preset for the **Spišská Nová Ves → Košice** route.
+Buys the **free (100 % discount) tickets** for a recurring commute from a
+dedicated LXC container. Two tools live here:
+
+* **`zssk_bulk.py`** — the one to use. Plans the whole selling window at once
+  (every matching weekday up to the e-shop's 60-day limit), keeps a ledger so a
+  re-run tops the window up instead of buying duplicates, and addresses the
+  page by what elements *are* rather than by generated ids.
+* **`buy.sh` / upstream `buy.py`** — [`europ/zssk-ticket-automation`](https://github.com/europ/zssk-ticket-automation)
+  patched to run again, kept for single one-off tickets.
 
 ```
 pve  ──►  LXC 121 "zssk" (Debian, 1 GB, nesting=1)
-             ├── /opt/zssk           upstream checkout + compatibility patch
-             ├── /opt/zssk/person.txt passenger data (0600, never in git)
-             └── /opt/zssk/buy.sh    wrapper: route defaults + headless Firefox
+             ├── /opt/zssk/zssk_bulk.py  bulk buyer (planner + ledger + flow)
+             ├── /opt/zssk/bulk.json     route, time, weekdays, pacing
+             ├── /opt/zssk/tickets.json  ledger of what was bought
+             ├── /opt/zssk/person.txt    passenger data (0600, never in git)
+             └── /opt/zssk/buy.sh        upstream checkout + compatibility patch
+                     ▲
+        zssk-topup.timer (weekly, disabled until you enable it)
 ```
+
+## Bulk buying
+
+```bash
+pct exec 121 -- nano /opt/zssk/person.txt   # name, surname, email, registration number
+pct exec 121 -- nano /opt/zssk/bulk.json    # route, departure time, weekdays
+
+cd /opt/zssk
+.venv/bin/python zssk_bulk.py --config bulk.json --list      # the plan, no browser
+xvfb-run -a .venv/bin/python zssk_bulk.py --config bulk.json --dry-run
+xvfb-run -a .venv/bin/python zssk_bulk.py --config bulk.json --confirm
+```
+
+`--list` prints every date it would buy and starts no browser. `--dry-run`
+(the default) walks the entire checkout and stops at the summary without
+confirming. `--confirm` is the only mode that places an order; the fare is
+0 €, so nothing is charged, but each order is a real reservation.
+
+Useful flags: `--max N` (buy at most N and stop), `--start DD.MM.YYYY`,
+`--horizon-days N`, `--delay N` (seconds between purchases, default 45),
+`--stop-on-error`, `--profile-dir DIR` (reuse one Firefox profile between runs).
+
+The ledger at `tickets.json` records every purchase, so re-running is safe: it
+buys only the dates that entered the window since last time. That is what the
+installed timer does — once a week, after you enable it:
+
+```bash
+systemctl enable --now zssk-topup.timer
+systemctl start zssk-topup.service   # run it once by hand
+journalctl -u zssk-topup.service -n 50
+```
+
+Cancel a ticket you end up not needing at `predaj.zssk.sk/refund`, and delete
+its line from `tickets.json` if you want the tool to buy that date again.
 
 ## Read this before you rely on it
 
@@ -78,6 +121,23 @@ pct exec 121 -- env DEPARTURE="Košice" ARRIVAL="Spišská Nová Ves" /opt/zssk/
 Any flag you pass wins over the default; everything is forwarded to `buy.py`
 (`--hold N` keeps the browser open longer, `-F` runs it non-headless).
 
+## How the new buyer differs from upstream
+
+| | upstream `buy.py` | `zssk_bulk.py` |
+| --- | --- | --- |
+| tickets per run | one | the whole booking window |
+| repeat runs | buys the same date again | ledger skips what it holds |
+| which train | the first result | the one departing at your time |
+| element addressing | absolute XPath + `j_idt261` | test attribute → id → visible label |
+| a broken step | stack trace | named step, screenshot + page dump, next date continues |
+| safety | buys on every run | `--list` / `--dry-run` default, `--confirm` is explicit |
+
+The flow is covered end to end by `tests/test_zssk_bulk_flow.py`, which drives
+a real Firefox against a local mock of the checkout in `mock/` — including
+that a dry run stops before confirming and that the 07:12 connection is picked
+over the 09:12 one listed above it. Planning, the ledger and config resolution
+are covered without a browser in `tests/test_zssk_bulk.py`.
+
 ## What was checked against the live site (1 Sep 2026)
 
 * `ikvc.slovakrail.sk` **no longer serves the e-sales app** — it resolves to
@@ -123,6 +183,8 @@ Any flag you pass wins over the default; everything is forwarded to `buy.py`
 
 | symptom | cause |
 | --- | --- |
+| every date fails at the same step | that step's selectors need re-mapping; the dump names the step |
+| `no typeahead suggestion` | the station name is not spelled the way the e-shop spells it |
 | `NoSuchElementException` on a long XPath | one of the unverified post-search steps; re-map it against the dumped `debug-*.html` |
 | connection reset / blank page | bot defense; try `-F` (non-headless) and a non-datacenter IP |
 | Firefox fails to start in the LXC | container needs `--features nesting=1` (bootstrap sets it) |

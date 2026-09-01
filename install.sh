@@ -88,15 +88,43 @@ fi
 
 install -m 0755 "$KIT_DIR/buy.sh" "$APP_DIR/buy.sh"
 
+say "installing the bulk buyer"
+install -m 0755 "$KIT_DIR/zssk_bulk.py" "$APP_DIR/zssk_bulk.py"
+if [ -s "$APP_DIR/bulk.json" ]; then
+  echo "   $APP_DIR/bulk.json kept (not overwritten)"
+else
+  install -m 0644 "$KIT_DIR/bulk.example.json" "$APP_DIR/bulk.json"
+  echo "   wrote template $APP_DIR/bulk.json -- set the route and weekdays"
+fi
+
+say "installing the weekly top-up timer (left disabled)"
+# Installed but not enabled: the timer buys tickets, so switching it on is a
+# deliberate act after a dry run has worked on this machine.
+install -m 0644 "$KIT_DIR/systemd/zssk-topup.service" /etc/systemd/system/
+install -m 0644 "$KIT_DIR/systemd/zssk-topup.timer" /etc/systemd/system/
+systemctl daemon-reload || true
+echo "   enable it with: systemctl enable --now zssk-topup.timer"
+
 cat <<MSG
 
 Installed into $APP_DIR
 
   1. edit the passenger data:   nano $APP_DIR/person.txt
-  2. dry run (stops before the order is confirmed):
-       $APP_DIR/buy.sh --stop-before-pay
-  3. real run:
-       $APP_DIR/buy.sh
+  2. set the route and weekdays: nano $APP_DIR/bulk.json
+
+Bulk buying (recommended -- plans the whole 60-day window, keeps a ledger):
+
+  $APP_DIR/.venv/bin/python $APP_DIR/zssk_bulk.py --config $APP_DIR/bulk.json --list
+  xvfb-run -a $APP_DIR/.venv/bin/python $APP_DIR/zssk_bulk.py --config $APP_DIR/bulk.json --dry-run
+  xvfb-run -a $APP_DIR/.venv/bin/python $APP_DIR/zssk_bulk.py --config $APP_DIR/bulk.json --confirm
+
+  then keep the window topped up weekly:
+  systemctl enable --now zssk-topup.timer
+
+Single ticket, patched upstream script:
+
+  $APP_DIR/buy.sh --stop-before-pay        # dry run
+  $APP_DIR/buy.sh                          # real run
 
 Screenshots and page dumps from a failed or dry run land in $APP_DIR/debug-*.
 MSG

@@ -1,0 +1,18 @@
+<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<title>Osobné údaje (2)</title><script src="_mock.js"></script></head>
+<body><h1>Osobné údaje (2)</h1>
+<input id="email" type="text" placeholder="Váš e-mail">
+<input id="cartItemLoop:0:connectionPersonal:passengerLoop:0:firstname" type="text" placeholder="Meno">
+<input id="cartItemLoop:0:connectionPersonal:passengerLoop:0:lastname" type="text" placeholder="Priezvisko">
+<input id="cartItemLoop:0:connectionPersonal:passengerLoop:0:cislo-registracie-p1" type="text">
+<input type="submit" value="Pokračovať" onclick="save()">
+<script>
+function save() {
+  remember('email', document.getElementById('email').value);
+  remember('firstname', document.querySelector('[id$=firstname]').value);
+  remember('lastname', document.querySelector('[id$=lastname]').value);
+  remember('registration', document.querySelector('[id*=cislo-registracie]').value);
+  location.href = 'payment.html';
+}
+</script>
+</body></html>
