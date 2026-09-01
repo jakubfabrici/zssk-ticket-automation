@@ -764,6 +764,16 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     click(driver, "terms")
     click_continue(driver)             # Výber platby
 
+    # Log what the summary charges BEFORE anything is confirmed: the whole
+    # point of the entitlement dance above is that this reads 0 EUR.
+    try:
+        text = driver.find_element(BY_XPATH, "//body").text
+        amounts = list(dict.fromkeys(re.findall(r"\d+[.,]\d{2}\s*(?:EUR|€)", text)))
+        if amounts:
+            log.info("summary amounts: %s", ", ".join(amounts)[:120])
+    except WebDriverException:
+        pass
+
     if dry_run:
         log.info("dry run: stopping at the summary without confirming")
         return "dry-run"
