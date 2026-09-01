@@ -370,6 +370,52 @@ def register_views(app: Flask) -> None:
         mutate_cfg(app, apply)
         return redirect(url_for("routes_list"))
 
+    @app.route("/settings", methods=["GET", "POST"])
+    def settings():
+        cfg = read_cfg(app)
+        errors: list[str] = []
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            surname = request.form.get("surname", "").strip()
+            email = request.form.get("email", "").strip()
+            train_card = request.form.get("train_card", "").strip()
+            delay_raw = request.form.get("delay", "").strip()
+            for label, value in (("Meno", name), ("Priezvisko", surname),
+                                 ("E-mail", email), ("Číslo registrácie", train_card)):
+                if not value:
+                    errors.append(f"{label} je povinné pole.")
+                elif "#" in value:
+                    errors.append(f"{label}: znak # nie je povolený.")
+            if email and "@" not in email:
+                errors.append("E-mail musí obsahovať @.")
+            try:
+                delay = float(delay_raw)
+                if not 15 <= delay <= 600:
+                    errors.append("Pauza medzi nákupmi musí byť 15 až 600 sekúnd.")
+            except ValueError:
+                errors.append("Pauza musí byť číslo.")
+                delay = None
+            if not errors:
+                zssk_bulk.save_person(
+                    person_path(app, cfg),
+                    zssk_bulk.Person(name=name, surname=surname,
+                                     email=email, train_card=train_card))
+                def apply(config):
+                    config["delay"] = delay
+                mutate_cfg(app, apply)
+                flash("Nastavenia uložené.")
+                return redirect(url_for("settings"))
+            values = request.form
+        else:
+            try:
+                person = zssk_bulk.load_person(person_path(app, cfg))
+                values = {"name": person.name, "surname": person.surname,
+                          "email": person.email, "train_card": person.train_card}
+            except (OSError, ValueError):
+                values = {}
+            values = dict(values, delay=cfg.get("delay", 45))
+        return render_template("settings.html", errors=errors, values=values)
+
 
 if __name__ == "__main__":
     from zssk_runner import Runner

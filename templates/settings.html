@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Nastavenia{% endblock %}
+{% block content %}
+<h1>Nastavenia</h1>
+{% for error in errors %}<p class="error">{{ error }}</p>{% endfor %}
+<form method="post">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <h2>Osobné údaje cestujúceho</h2>
+  <label>Meno <input type="text" name="name"
+      value="{{ values.get('name', '') }}" required></label>
+  <label>Priezvisko <input type="text" name="surname"
+      value="{{ values.get('surname', '') }}" required></label>
+  <label>E-mail (sem chodia lístky) <input type="text" name="email"
+      value="{{ values.get('email', '') }}" required></label>
+  <label>Číslo registrácie ZSSK <input type="text" name="train_card"
+      value="{{ values.get('train_card', '') }}" required></label>
+  <h2>Beh</h2>
+  <label>Pauza medzi nákupmi (sekundy, 15 až 600)
+    <input type="number" name="delay" value="{{ values.get('delay', 45) }}"></label>
+  <button type="submit">Uložiť</button>
+</form>
+{% endblock %}
