@@ -421,6 +421,7 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
                    "/preceding-sibling::*[1]"),
     ],
     "continue": [
+        (BY_CSS, "[data-cy=continue]"),
         (BY_ID, "actionIndividualContinue"),
         (BY_XPATH, "//input[contains(@value,'Pokračovať')]"),
         (BY_XPATH, "//a[normalize-space(.)='Pokračovať']"),
@@ -459,6 +460,10 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
     "pax_account_id": [(BY_CSS, "input[id$=':accountId']")],
     "pax_filter": [(BY_CSS, "[id$=':filterButton']")],
     "pax_filter_result": [(BY_CSS, "[id$=':filterResult']")],
+    # Logged-in /personal: "Identifikátor" of type "Číslo ZSSK konta" is the
+    # required field that binds the ticket to the konto (and thus the app);
+    # the same number already passed the konto filter on the passenger card.
+    "personal_identification": [(BY_CSS, "input[id$=':identification']")],
     "terms": [
         (BY_XPATH, "//label[contains(normalize-space(.),'obchodnými podmienkami')]"),
         (BY_XPATH, "//label[contains(normalize-space(.),'podmienkami')]"),
@@ -824,7 +829,8 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     # card, so these later fields may legitimately be gone.
     for step, value in (("first_name", person.name),
                         ("last_name", person.surname),
-                        ("registration", person.train_card)):
+                        ("registration", person.train_card),
+                        ("personal_identification", person.train_card)):
         fill_if_present(driver, step, value)
 
     click_continue(driver)             # Osobné údaje
