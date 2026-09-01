@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Upraviť trasu' if editing else 'Nová trasa' }}{% endblock %}
+{% block content %}
+<h1>{{ 'Upraviť trasu' if editing else 'Nová trasa' }}</h1>
+{% for error in errors %}<p class="error">{{ error }}</p>{% endfor %}
+<form method="post">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  {% if not editing %}
+  <label>ID (malé písmená, číslice, pomlčky)
+    <input type="text" name="id" value="{{ values.get('id', '') }}" required></label>
+  {% endif %}
+  <label>Názov <input type="text" name="name" value="{{ values.get('name', '') }}"></label>
+  <label>Odkiaľ <input type="text" name="departure"
+      value="{{ values.get('departure', '') }}" required></label>
+  <label>Kam <input type="text" name="arrival"
+      value="{{ values.get('arrival', '') }}" required></label>
+  <label>Čas odchodu (HH:MM) <input type="text" name="time"
+      value="{{ values.get('time', '') }}" required></label>
+  <label>Vlak (napr. EX 619 alebo Tatran, nepovinné)
+    <input type="text" name="train" value="{{ values.get('train', '') }}"></label>
+  <label>Dni v týždni (po,ut,st,stv,pia,so,ne; prázdne = každý deň)
+    <input type="text" name="weekdays" value="{{ values.get('weekdays', '') }}"></label>
+  <label>Počet opakovaní (prázdne = celé okno 60 dní)
+    <input type="text" name="max" value="{{ values.get('max', '') }}"></label>
+  <label><input type="checkbox" name="enabled"
+      {{ 'checked' if values.get('enabled') else '' }}> Zapnutá</label>
+  <button type="submit">Uložiť</button>
+</form>
+{% endblock %}

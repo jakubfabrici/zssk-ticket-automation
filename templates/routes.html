@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Trasy{% endblock %}
+{% block content %}
+<h1>Trasy</h1>
+<p><a href="{{ url_for('route_new') }}"><button>Pridať trasu</button></a></p>
+{% if not cards %}<p>Zatiaľ žiadne trasy.</p>{% endif %}
+{% for card in cards %}
+<div class="card {{ '' if card.route.enabled else 'disabled' }}">
+  <h2>{{ card.route.name }} <small>({{ card.route.id }})</small></h2>
+  <p>{{ card.route.trip.departure }} → {{ card.route.trip.arrival }}
+     o {{ card.route.trip.time }}
+     {% if card.route.trip.train %} · vlak {{ card.route.trip.train }}{% endif %}
+     {% if card.weekdays %} · dni: {{ card.weekdays }}{% endif %}
+     {% if card.route.max %} · max {{ card.route.max }}×{% endif %}
+     · {{ 'zapnutá' if card.route.enabled else 'vypnutá' }}</p>
+  <details><summary>Naplánované: {{ card.planned | length }}
+     {% if card.planned %} (najbližší {{ card.planned[0].isoformat() }}){% endif %}</summary>
+    <ul>{% for day in card.planned %}<li>{{ day.isoformat() }}</li>{% endfor %}</ul>
+  </details>
+  <details><summary>Kúpené: {{ card.bought | length }}</summary>
+    <ul>{% for day in card.bought %}<li>{{ day }}</li>{% endfor %}</ul>
+  </details>
+  <a href="{{ url_for('route_edit', rid=card.route.id) }}"><button>Upraviť</button></a>
+  <form class="inline" method="post" action="{{ url_for('route_toggle', rid=card.route.id) }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button type="submit">{{ 'Vypnúť' if card.route.enabled else 'Zapnúť' }}</button>
+  </form>
+  <form class="inline" method="post" action="{{ url_for('route_delete', rid=card.route.id) }}"
+        onsubmit="return confirm('Naozaj zmazať trasu {{ card.route.name }}?')">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">Zmazať</button>
+  </form>
+</div>
+{% endfor %}
+{% endblock %}

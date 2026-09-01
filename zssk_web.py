@@ -227,17 +227,133 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
         session.clear()
         return redirect(url_for("login"))
 
-    @app.route("/routes")
-    def routes_list():
-        # Placeholder body until Task 7; the auth tests only need a 200.
-        return render_template("base.html")
-
     register_views(app)
     return app
 
 
+def route_overview(app: Flask, route, today=None):
+    """(planned dates, bought ISO date strings) for one route, from the ledger."""
+    cfg = read_cfg(app)
+    ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
+    horizon = int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS))
+    planned = zssk_bulk.plan_dates(route.trip, today or dt.date.today(),
+                                   horizon, ledger.bought(), None, route.max)
+    suffix = f"|{route.trip.time}|{route.trip.departure}->{route.trip.arrival}"
+    bought = sorted(key.split("|", 1)[0] for key, value in ledger.entries.items()
+                    if value.get("status") == "bought" and key.endswith(suffix))
+    return planned, bought
+
+
+def parse_route_form(form, existing_ids: set[str],
+                     editing_id: str | None = None) -> tuple[dict | None, list[str]]:
+    errors: list[str] = []
+    route_id = (editing_id or form.get("id", "")).strip()
+    name = form.get("name", "").strip()
+    departure = form.get("departure", "").strip()
+    arrival = form.get("arrival", "").strip()
+    time_value = form.get("time", "").strip()
+    train = form.get("train", "").strip()
+    weekdays = form.get("weekdays", "").strip()
+    max_raw = form.get("max", "").strip()
+
+    if editing_id is None and not ID_RE.fullmatch(route_id):
+        errors.append("ID: len malé písmená, číslice a pomlčky (max 32 znakov).")
+    if editing_id is None and route_id in existing_ids:
+        errors.append(f"Trasa s ID '{route_id}' už existuje.")
+    if not departure or not arrival:
+        errors.append("Stanice sú povinné.")
+    if not TIME_RE.fullmatch(time_value):
+        errors.append("Čas odchodu musí byť v tvare HH:MM.")
+    for label, value in (("Názov", name), ("Odkiaľ", departure),
+                         ("Kam", arrival), ("Vlak", train)):
+        if "#" in value:
+            errors.append(f"{label}: znak # nie je povolený.")
+    try:
+        zssk_bulk.parse_weekdays(weekdays or "")
+    except ValueError as exc:
+        errors.append(f"Dni v týždni: {exc}")
+    max_value: int | None = None
+    if max_raw:
+        if not max_raw.isdigit() or int(max_raw) < 1:
+            errors.append("Počet opakovaní musí byť kladné celé číslo, alebo prázdny.")
+        else:
+            max_value = int(max_raw)
+    if errors:
+        return None, errors
+    return {"id": route_id, "name": name or route_id,
+            "departure": departure, "arrival": arrival, "time": time_value,
+            "train": train or None, "weekdays": weekdays,
+            "max": max_value, "enabled": bool(form.get("enabled"))}, []
+
+
 def register_views(app: Flask) -> None:
     """Routes CRUD, settings, run and history views (Tasks 7 to 9)."""
+
+    @app.route("/routes")
+    def routes_list():
+        routes = zssk_bulk.load_routes(read_cfg(app))
+        cards = []
+        for route in routes:
+            planned, bought = route_overview(app, route)
+            cards.append({"route": route, "planned": planned, "bought": bought,
+                          "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
+        return render_template("routes.html", cards=cards)
+
+    @app.route("/routes/new", methods=["GET", "POST"])
+    def route_new():
+        cfg = normalized(read_cfg(app))
+        existing = {r["id"] for r in cfg["routes"]} if cfg.get("routes") else set()
+        if request.method == "POST":
+            parsed, errors = parse_route_form(request.form, existing)
+            if parsed:
+                mutate_cfg(app, lambda c: c.setdefault("routes", []).append(parsed))
+                flash("Trasa pridaná.")
+                return redirect(url_for("routes_list"))
+            return render_template("route_form.html", errors=errors,
+                                   values=request.form, editing=None)
+        return render_template("route_form.html", errors=[], values={},
+                               editing=None)
+
+    def _find(cfg: dict, rid: str) -> dict:
+        for raw in cfg.get("routes", []):
+            if raw.get("id") == rid:
+                return raw
+        abort(404)
+
+    @app.route("/routes/<rid>/edit", methods=["GET", "POST"])
+    def route_edit(rid):
+        cfg = normalized(read_cfg(app))
+        raw = _find(cfg, rid)
+        if request.method == "POST":
+            parsed, errors = parse_route_form(request.form, set(), editing_id=rid)
+            if parsed:
+                mutate_cfg(app, lambda c: _find(c, rid).update(parsed))
+                flash("Trasa uložená.")
+                return redirect(url_for("routes_list"))
+            return render_template("route_form.html", errors=errors,
+                                   values=request.form, editing=rid)
+        values = dict(raw)
+        values["max"] = "" if raw.get("max") is None else raw["max"]
+        values["train"] = raw.get("train") or ""
+        return render_template("route_form.html", errors=[], values=values,
+                               editing=rid)
+
+    @app.route("/routes/<rid>/delete", methods=["POST"])
+    def route_delete(rid):
+        def apply(cfg):
+            _find(cfg, rid)
+            cfg["routes"] = [r for r in cfg["routes"] if r["id"] != rid]
+        mutate_cfg(app, apply)
+        flash("Trasa zmazaná.")
+        return redirect(url_for("routes_list"))
+
+    @app.route("/routes/<rid>/toggle", methods=["POST"])
+    def route_toggle(rid):
+        def apply(cfg):
+            raw = _find(cfg, rid)
+            raw["enabled"] = not raw.get("enabled", True)
+        mutate_cfg(app, apply)
+        return redirect(url_for("routes_list"))
 
 
 if __name__ == "__main__":
