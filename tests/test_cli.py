@@ -173,3 +173,12 @@ def test_train_flag_overrides_the_configured_train(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "train IC 44" in out and "train EX 619" not in out
+
+
+def test_already_departed_only_skips_todays_past_departures():
+    from zssk_bulk import already_departed
+    now = dt.datetime(2026, 9, 1, 20, 1)
+    assert already_departed(dt.date(2026, 9, 1), "16:58", now)
+    assert already_departed(dt.date(2026, 9, 1), "20:01", now)   # boundary: gone
+    assert not already_departed(dt.date(2026, 9, 1), "21:30", now)
+    assert not already_departed(dt.date(2026, 9, 2), "16:58", now)

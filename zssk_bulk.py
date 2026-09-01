@@ -359,6 +359,7 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
     "time": [(BY_ID, "departTime")],
     "search": [(BY_CSS, "[data-cy=search]"), (BY_ID, "actionSearchConnectionButton")],
     "buy": [
+        (BY_CSS, "[data-cy=buy-ticket]"),
         (BY_CSS, "[data-cy=buyTicket]"),
         (BY_XPATH, "//a[contains(normalize-space(.),'Kúpiť lístok')]"),
         (BY_XPATH, "//input[contains(@value,'Kúpiť lístok')]"),
@@ -368,9 +369,21 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
         (BY_XPATH, "//a[contains(normalize-space(.),'Dospelý')]"),
         (BY_XPATH, "//a[contains(normalize-space(.),'Cestujúci')]"),
     ],
-    "passenger_young": [(BY_XPATH, "//li/a[contains(normalize-space(.),'Mladý')]")],
-    "card_type": [(BY_XPATH, "//a[contains(normalize-space(.),'Bez zľavy')]")],
+    "passenger_young": [
+        # Live DOM 2026-09: the category is a bare <li> carrying a stable id,
+        # renamed from "Mladý (16 - 25 r.)" to "Mladý 18 - 25 r.".
+        (BY_CSS, "li[data-age-category-id='204']"),
+        (BY_XPATH, "//li[@data-age-category-id][contains(normalize-space(.),'Mladý')]"),
+        (BY_XPATH, "//li/a[contains(normalize-space(.),'Mladý')]"),
+    ],
+    "card_type": [
+        (BY_XPATH, "//a[contains(normalize-space(.),'Bez dodatočnej zľavy')]"),
+        (BY_XPATH, "//li[@data-discount-type-id='1']"),
+        (BY_XPATH, "//a[contains(normalize-space(.),'Bez zľavy')]"),
+    ],
     "card_student": [
+        (BY_XPATH, "//li[@data-discount-type-id][contains(normalize-space(.),'žiak')]"),
+        (BY_XPATH, "//li[@data-discount-type-id][contains(normalize-space(.),'tudent')]"),
         (BY_XPATH, "//li/a[contains(normalize-space(.),'žiaka')]"),
         (BY_XPATH, "//li/a[contains(normalize-space(.),'tudent')]"),
     ],
@@ -813,6 +826,19 @@ def acquire_run_lock(ledger_path: str):
     return handle
 
 
+def already_departed(day: dt.date, hhmm: str, now: dt.datetime) -> bool:
+    """True when `day` is today and the `hhmm` departure has already left.
+
+    Observed live: buying today's train after its departure walks into a
+    results page whose buy button never shows, burning one of the three
+    allowed consecutive failures for nothing.
+    """
+    if day != now.date():
+        return False
+    hour, minute = map(int, hhmm.split(":"))
+    return now.time() >= dt.time(hour, minute)
+
+
 def build_work(routes: list[Route], ledger: Ledger, today: dt.date,
                horizon_days: int, start: dt.date | None,
                cap: int | None) -> list[tuple[Route, dt.date]]:
@@ -872,6 +898,15 @@ def main(argv: list[str] | None = None) -> int:
     ledger = Ledger.load(settings["ledger"])
     work = build_work(routes, ledger, dt.date.today(), settings["horizon_days"],
                       start, int(settings["max"]) if settings["max"] else None)
+
+    now = dt.datetime.now()
+    departed = [(route, day) for route, day in work
+                if already_departed(day, route.trip.time, now)]
+    for route, day in departed:
+        log.info("skipping %s %s: the %s departure already left today",
+                 route.id, day.isoformat(), route.trip.time)
+    if departed:
+        work = [item for item in work if item not in departed]
 
     for route in routes:
         count = sum(1 for r, _ in work if r.id == route.id)

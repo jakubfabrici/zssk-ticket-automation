@@ -106,8 +106,11 @@ say "installing geckodriver"
 # Selenium Manager normally downloads a matching geckodriver on first run, but
 # that needs outbound HTTPS at run time; installing it up front keeps runs
 # offline-safe and makes failures obvious now rather than mid-purchase.
-if ! command -v geckodriver >/dev/null 2>&1; then
-  GD_VER="${GECKODRIVER_VERSION:-0.36.0}"
+GD_VER="${GECKODRIVER_VERSION:-0.37.1}"
+# Upgrade too, not only install: firefox-esr 140 wants geckodriver 0.37.x and
+# Selenium logs a compatibility warning with the 0.36.0 this used to pin.
+if ! command -v geckodriver >/dev/null 2>&1 \
+   || ! geckodriver --version 2>/dev/null | head -1 | grep -q "geckodriver $GD_VER"; then
   ARCH=$(uname -m); case "$ARCH" in x86_64) GD_ARCH=linux64;; aarch64) GD_ARCH=linux-aarch64;; *) GD_ARCH="";; esac
   if [ -n "$GD_ARCH" ] && curl -fsSL -o /tmp/geckodriver.tar.gz \
       "https://github.com/mozilla/geckodriver/releases/download/v${GD_VER}/geckodriver-v${GD_VER}-${GD_ARCH}.tar.gz"; then
