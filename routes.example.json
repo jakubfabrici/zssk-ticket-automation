@@ -1,0 +1,32 @@
+{
+  "routes": [
+    {
+      "id": "rano",
+      "name": "Ranný do práce",
+      "departure": "Spišská Nová Ves",
+      "arrival": "Košice",
+      "time": "07:12",
+      "train": null,
+      "weekdays": "po,ut,st,stv,pia",
+      "max": null,
+      "enabled": true
+    },
+    {
+      "id": "tatran-ne",
+      "name": "Tatran do Košíc",
+      "departure": "Spišská Nová Ves",
+      "arrival": "Košice",
+      "time": "16:58",
+      "train": "EX 619",
+      "weekdays": "ne",
+      "max": 5,
+      "enabled": false
+    }
+  ],
+  "delay": 45,
+  "person": "/etc/zssk/person.txt",
+  "ledger": "/var/lib/zssk/ledger.json",
+  "debug_dir": "/var/lib/zssk/debug",
+  "download_dir": "/var/lib/zssk/downloads",
+  "profile_dir": "/var/lib/zssk/profile"
+}

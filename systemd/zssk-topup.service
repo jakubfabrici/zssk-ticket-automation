@@ -12,7 +12,7 @@ WorkingDirectory=/opt/zssk
 # --confirm is deliberate: enable the timer only after a --dry-run has walked
 # the whole flow successfully on this machine.
 ExecStart=/usr/bin/xvfb-run -a /opt/zssk/.venv/bin/python /opt/zssk/zssk_bulk.py \
-    --config /opt/zssk/bulk.json --confirm
+    --config /etc/zssk/routes.json --confirm
 TimeoutStartSec=3600
 Nice=10
 

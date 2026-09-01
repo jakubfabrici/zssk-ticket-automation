@@ -1,0 +1,14 @@
+[Unit]
+Description=ZSSK bulk buyer web UI
+Documentation=https://github.com/jakubfabrici/claudecode/tree/main/deploy/zssk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/zssk
+ExecStart=/opt/zssk/.venv/bin/python /opt/zssk/zssk_web.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
