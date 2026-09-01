@@ -48,6 +48,26 @@ def write_cfg(app: Flask, cfg: dict) -> None:
     tmp.replace(path)
 
 
+class ConfigError(Exception):
+    """A config file the CLI parser rejects, carried as a Slovak message."""
+
+
+def read_cfg_safe(app: Flask) -> dict:
+    """Config for read-only views: corrupt JSON degrades to {}, never a 500."""
+    try:
+        return read_cfg(app)
+    except ValueError:
+        return {}
+
+
+def safe_routes(app: Flask):
+    """(routes, error): a broken routes.json shows an error instead of killing the view."""
+    try:
+        return zssk_bulk.load_routes(read_cfg(app)), None
+    except (SystemExit, ValueError) as exc:
+        return [], f"routes.json sa nedá načítať: {exc}"
+
+
 def route_to_dict(route: "zssk_bulk.Route") -> dict:
     return {"id": route.id, "name": route.name,
             "departure": route.trip.departure, "arrival": route.trip.arrival,
@@ -61,7 +81,10 @@ def normalized(cfg: dict) -> dict:
     if "routes" in cfg:
         return cfg
     out = {key: cfg[key] for key in GLOBAL_KEYS if key in cfg}
-    out["routes"] = [route_to_dict(r) for r in zssk_bulk.load_routes(cfg)]
+    try:
+        out["routes"] = [route_to_dict(r) for r in zssk_bulk.load_routes(cfg)]
+    except (SystemExit, ValueError) as exc:
+        raise ConfigError(f"routes.json sa nedá načítať: {exc}") from exc
     return out
 
 
@@ -75,10 +98,21 @@ def mutate_cfg(app: Flask, mutate) -> dict:
     The purchase itself is protected separately, by acquire_run_lock in the CLI.
     """
     with CFG_LOCK:
-        cfg = normalized(read_cfg(app))
+        try:
+            cfg = normalized(read_cfg(app))
+        except ValueError as exc:
+            raise ConfigError(f"routes.json je poškodený JSON: {exc}") from exc
         mutate(cfg)
         write_cfg(app, cfg)
         return cfg
+
+
+def normalized_cfg(app: Flask) -> dict:
+    """normalized(read_cfg(...)), with unparsable JSON raised as ConfigError too."""
+    try:
+        return normalized(read_cfg(app))
+    except ValueError as exc:
+        raise ConfigError(f"routes.json je poškodený JSON: {exc}") from exc
 
 
 class _DuplicateRoute(Exception):
@@ -99,7 +133,7 @@ def debug_dir(app: Flask, cfg: dict) -> Path:
 
 def person_ok(app: Flask) -> bool:
     try:
-        person = zssk_bulk.load_person(person_path(app, read_cfg(app)))
+        person = zssk_bulk.load_person(person_path(app, read_cfg_safe(app)))
     except (OSError, ValueError):
         return False
     return "example.com" not in person.email
@@ -238,8 +272,11 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
 
 def route_overview(app: Flask, route, today=None):
     """(planned dates, bought ISO date strings) for one route, from the ledger."""
-    cfg = read_cfg(app)
-    ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
+    cfg = read_cfg_safe(app)
+    try:
+        ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
+    except SystemExit as exc:
+        raise ConfigError(f"Evidencia sa nedá načítať: {exc}") from exc
     horizon = int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS))
     planned = zssk_bulk.plan_dates(route.trip, today or dt.date.today(),
                                    horizon, ledger.bought(), None, route.max)
@@ -296,39 +333,46 @@ def register_views(app: Flask) -> None:
 
     @app.route("/routes")
     def routes_list():
-        routes = zssk_bulk.load_routes(read_cfg(app))
+        routes, cfg_error = safe_routes(app)
         cards = []
-        for route in routes:
-            planned, bought = route_overview(app, route)
-            cards.append({"route": route, "planned": planned, "bought": bought,
-                          "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
-        return render_template("routes.html", cards=cards)
+        try:
+            for route in routes:
+                planned, bought = route_overview(app, route)
+                cards.append({"route": route, "planned": planned, "bought": bought,
+                              "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
+        except ConfigError as exc:
+            cards, cfg_error = [], str(exc)
+        return render_template("routes.html", cards=cards, cfg_error=cfg_error)
 
     @app.route("/routes/new", methods=["GET", "POST"])
     def route_new():
-        cfg = normalized(read_cfg(app))
-        existing = {r["id"] for r in cfg["routes"]} if cfg.get("routes") else set()
-        if request.method == "POST":
-            parsed, errors = parse_route_form(request.form, existing)
-            if parsed:
-                def apply(cfg):
-                    if any(r.get("id") == parsed["id"]
-                           for r in cfg.get("routes", [])):
-                        raise _DuplicateRoute
-                    cfg.setdefault("routes", []).append(parsed)
-                try:
-                    mutate_cfg(app, apply)
-                except _DuplicateRoute:
-                    return render_template(
-                        "route_form.html",
-                        errors=[f"Trasa s ID '{parsed['id']}' už existuje."],
-                        values=request.form, editing=None)
-                flash("Trasa pridaná.")
-                return redirect(url_for("routes_list"))
-            return render_template("route_form.html", errors=errors,
-                                   values=request.form, editing=None)
-        return render_template("route_form.html", errors=[], values={},
-                               editing=None)
+        try:
+            cfg = normalized_cfg(app)
+            existing = {r["id"] for r in cfg["routes"]} if cfg.get("routes") else set()
+            if request.method == "POST":
+                parsed, errors = parse_route_form(request.form, existing)
+                if parsed:
+                    def apply(cfg):
+                        if any(r.get("id") == parsed["id"]
+                               for r in cfg.get("routes", [])):
+                            raise _DuplicateRoute
+                        cfg.setdefault("routes", []).append(parsed)
+                    try:
+                        mutate_cfg(app, apply)
+                    except _DuplicateRoute:
+                        return render_template(
+                            "route_form.html",
+                            errors=[f"Trasa s ID '{parsed['id']}' už existuje."],
+                            values=request.form, editing=None)
+                    flash("Trasa pridaná.")
+                    return redirect(url_for("routes_list"))
+                return render_template("route_form.html", errors=errors,
+                                       values=request.form, editing=None)
+            return render_template("route_form.html", errors=[], values={},
+                                   editing=None)
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
 
     def _find(cfg: dict, rid: str) -> dict:
         for raw in cfg.get("routes", []):
@@ -338,16 +382,20 @@ def register_views(app: Flask) -> None:
 
     @app.route("/routes/<rid>/edit", methods=["GET", "POST"])
     def route_edit(rid):
-        cfg = normalized(read_cfg(app))
-        raw = _find(cfg, rid)
-        if request.method == "POST":
-            parsed, errors = parse_route_form(request.form, set(), editing_id=rid)
-            if parsed:
-                mutate_cfg(app, lambda c: _find(c, rid).update(parsed))
-                flash("Trasa uložená.")
-                return redirect(url_for("routes_list"))
-            return render_template("route_form.html", errors=errors,
-                                   values=request.form, editing=rid)
+        try:
+            cfg = normalized_cfg(app)
+            raw = _find(cfg, rid)
+            if request.method == "POST":
+                parsed, errors = parse_route_form(request.form, set(), editing_id=rid)
+                if parsed:
+                    mutate_cfg(app, lambda c: _find(c, rid).update(parsed))
+                    flash("Trasa uložená.")
+                    return redirect(url_for("routes_list"))
+                return render_template("route_form.html", errors=errors,
+                                       values=request.form, editing=rid)
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
         values = dict(raw)
         values["max"] = "" if raw.get("max") is None else raw["max"]
         values["train"] = raw.get("train") or ""
@@ -359,7 +407,11 @@ def register_views(app: Flask) -> None:
         def apply(cfg):
             _find(cfg, rid)
             cfg["routes"] = [r for r in cfg["routes"] if r["id"] != rid]
-        mutate_cfg(app, apply)
+        try:
+            mutate_cfg(app, apply)
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
         flash("Trasa zmazaná.")
         return redirect(url_for("routes_list"))
 
@@ -368,12 +420,15 @@ def register_views(app: Flask) -> None:
         def apply(cfg):
             raw = _find(cfg, rid)
             raw["enabled"] = not raw.get("enabled", True)
-        mutate_cfg(app, apply)
+        try:
+            mutate_cfg(app, apply)
+        except ConfigError as exc:
+            flash(str(exc))
         return redirect(url_for("routes_list"))
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
-        cfg = read_cfg(app)
+        cfg = read_cfg_safe(app)
         errors: list[str] = []
         if request.method == "POST":
             name = request.form.get("name", "").strip()
@@ -403,7 +458,11 @@ def register_views(app: Flask) -> None:
                                      email=email, train_card=train_card))
                 def apply(config):
                     config["delay"] = delay
-                mutate_cfg(app, apply)
+                try:
+                    mutate_cfg(app, apply)
+                except ConfigError as exc:
+                    flash(str(exc))
+                    return redirect(url_for("routes_list"))
                 flash("Nastavenia uložené.")
                 return redirect(url_for("settings"))
             values = request.form
@@ -420,30 +479,37 @@ def register_views(app: Flask) -> None:
     DEBUG_NAME_RE = re.compile(r"^debug-[A-Za-z0-9._-]+\.(png|html)$")
 
     def _run_context(app):
-        routes = [r for r in zssk_bulk.load_routes(read_cfg(app)) if r.enabled]
-        return routes, person_ok(app)
+        routes, cfg_error = safe_routes(app)
+        return [r for r in routes if r.enabled], person_ok(app), cfg_error
 
     @app.route("/run")
     def run_page():
-        routes, ready = _run_context(app)
+        routes, ready, cfg_error = _run_context(app)
         status = app.config["RUNNER"].status()
         return render_template("run.html", routes=routes, ready=ready,
-                               status=status)
+                               status=status, cfg_error=cfg_error)
 
     def _selected(app):
         route_id = request.form.get("route", "")
-        routes, ready = _run_context(app)
-        if route_id:
-            routes = [r for r in zssk_bulk.load_routes(read_cfg(app))
+        routes, ready, cfg_error = _run_context(app)
+        if route_id and not cfg_error:
+            routes = [r for r in safe_routes(app)[0]
                       if r.id == route_id] or abort(404)
-        return route_id, routes, ready
+        return route_id, routes, ready, cfg_error
 
     @app.route("/run/confirm", methods=["POST"])
     def run_confirm():
-        route_id, routes, ready = _selected(app)
+        route_id, routes, ready, cfg_error = _selected(app)
+        if cfg_error:
+            flash(cfg_error)
+            return redirect(url_for("run_page"))
         if not ready:
             abort(400)
-        preview = [(route, route_overview(app, route)[0]) for route in routes]
+        try:
+            preview = [(route, route_overview(app, route)[0]) for route in routes]
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("run_page"))
         return render_template("run_confirm.html", preview=preview,
                                route_id=route_id)
 
@@ -452,7 +518,10 @@ def register_views(app: Flask) -> None:
         mode = request.form.get("mode", "dry-run")
         if mode not in ("dry-run", "confirm"):
             abort(400)
-        route_id, routes, ready = _selected(app)
+        route_id, routes, ready, cfg_error = _selected(app)
+        if cfg_error:
+            flash(cfg_error)
+            return redirect(url_for("run_page"))
         if not ready or not routes:
             abort(400)
         argv = list(app.config["BULK_ARGV"]) + [
@@ -482,21 +551,26 @@ def register_views(app: Flask) -> None:
 
     @app.route("/history")
     def history():
-        cfg = read_cfg(app)
-        ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
-        entries = sorted(ledger.entries.items(),
-                         key=lambda item: item[1].get("at", ""), reverse=True)
+        cfg = read_cfg_safe(app)
+        cfg_error = None
+        try:
+            ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
+            entries = sorted(ledger.entries.items(),
+                             key=lambda item: item[1].get("at", ""), reverse=True)
+        except SystemExit as exc:
+            entries, cfg_error = [], f"Evidencia sa nedá načítať: {exc}"
         directory = debug_dir(app, cfg)
         dumps = sorted((p.name for p in directory.glob("debug-*")
                         if DEBUG_NAME_RE.fullmatch(p.name)), reverse=True) \
             if directory.exists() else []
-        return render_template("history.html", entries=entries, dumps=dumps)
+        return render_template("history.html", entries=entries, dumps=dumps,
+                               cfg_error=cfg_error)
 
     @app.route("/debug/<path:name>")
     def debug_file(name):
         if not DEBUG_NAME_RE.fullmatch(name):
             abort(404)
-        return send_from_directory(debug_dir(app, read_cfg(app)), name)
+        return send_from_directory(debug_dir(app, read_cfg_safe(app)), name)
 
 
 if __name__ == "__main__":
@@ -508,4 +582,5 @@ if __name__ == "__main__":
         runner=Runner(),
     )
     # The container has one LAN address; nothing forwards this port anywhere.
-    application.run(host="0.0.0.0", port=8080, threaded=True)
+    application.run(host=os.environ.get("ZSSK_BIND", "0.0.0.0"), port=8080,
+                    threaded=True)

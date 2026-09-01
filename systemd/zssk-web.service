@@ -9,6 +9,9 @@ WorkingDirectory=/opt/zssk
 ExecStart=/opt/zssk/.venv/bin/python /opt/zssk/zssk_web.py
 Restart=on-failure
 RestartSec=5
+# restart the web app only; a purchase child keeps running and finishes its
+# ledger write
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target

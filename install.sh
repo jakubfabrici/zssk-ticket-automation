@@ -45,6 +45,14 @@ if [ ! -e "$ETC_DIR/routes.json" ]; then
     echo "   wrote template $ETC_DIR/routes.json"
   fi
 fi
+# Fail fast on a hand-edited config BEFORE the git reset/clean below can
+# remove the app while the enrichment step later would abort anyway.
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m json.tool "$ETC_DIR/routes.json" >/dev/null || {
+    echo "!! $ETC_DIR/routes.json is not valid JSON - fix it and re-run install" >&2
+    exit 1
+  }
+fi
 if [ -f "$APP_DIR/tickets.json" ]; then
   if [ ! -e "$STATE_DIR/ledger.json" ]; then
     mv "$APP_DIR/tickets.json" "$STATE_DIR/ledger.json"
@@ -158,9 +166,8 @@ echo "   enable it with: systemctl enable --now zssk-topup.timer"
 install -m 0644 "$KIT_DIR/systemd/zssk-web.service" /etc/systemd/system/
 systemctl daemon-reload || true
 systemctl enable zssk-web.service || true
-# restart, not start: a redeploy must load the new code, and restart also
-# starts a unit that is not running yet.
-systemctl restart zssk-web.service || true
+# The token is minted BEFORE the restart: a freshly restarted app would
+# otherwise serve /setup for a moment with no token required at all.
 if [ ! -e "$ETC_DIR/webui.env" ]; then
   if [ ! -s "$ETC_DIR/setup-token" ]; then
     # 0600 from the first byte: the subshell umask applies before the redirect
@@ -169,6 +176,9 @@ if [ ! -e "$ETC_DIR/webui.env" ]; then
   fi
   echo "   setup token (the /setup page asks for it once): $(cat "$ETC_DIR/setup-token")"
 fi
+# restart, not start: a redeploy must load the new code, and restart also
+# starts a unit that is not running yet.
+systemctl restart zssk-web.service || true
 echo "   web UI: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8080"
 
 cat <<MSG

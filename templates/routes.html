@@ -2,6 +2,7 @@
 {% block title %}Trasy{% endblock %}
 {% block content %}
 <h1>Trasy</h1>
+{% if cfg_error %}<p class="error">{{ cfg_error }}</p>{% endif %}
 <p><a href="{{ url_for('route_new') }}"><button>Pridať trasu</button></a></p>
 {% if not cards %}<p>Zatiaľ žiadne trasy.</p>{% endif %}
 {% for card in cards %}

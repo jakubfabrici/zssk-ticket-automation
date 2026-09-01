@@ -2,6 +2,7 @@
 {% block title %}História{% endblock %}
 {% block content %}
 <h1>História</h1>
+{% if cfg_error %}<p class="error">{{ cfg_error }}</p>{% endif %}
 {% if not entries %}<p>Evidencia je zatiaľ prázdna.</p>{% endif %}
 {% if entries %}
 <table>

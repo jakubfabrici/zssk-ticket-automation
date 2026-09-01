@@ -9,7 +9,7 @@
       "train": null,
       "weekdays": "po,ut,st,stv,pia",
       "max": null,
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "tatran-ne",

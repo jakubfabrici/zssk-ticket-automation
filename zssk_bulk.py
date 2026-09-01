@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import dataclasses
 import datetime as dt
 import fcntl
 import json
@@ -47,6 +48,11 @@ log = logging.getLogger("zssk")
 BOOKING_HORIZON_DAYS = 60
 
 DEFAULT_URL = "https://predaj.zssk.sk/search"
+
+# Where install.sh puts the ledger. A bare CLI run (no --config, no --ledger)
+# must share it with the deployed web UI and timer, so the two never buy the
+# same date twice; the run lock is derived from this path as well.
+STATE_LEDGER = Path("/var/lib/zssk/ledger.json")
 
 WEEKDAY_NAMES = {
     "mon": 0, "po": 0, "pon": 0,
@@ -545,7 +551,9 @@ def select_connection(driver, departure_time: str, train: str | None = None,
 
 def dump_state(driver, tag: str, directory: Path) -> Path | None:
     """Screenshot + page source, so a broken step is diagnosable afterwards."""
-    directory.mkdir(parents=True, exist_ok=True)
+    # mode=0o700: these dumps carry personal data, and a directory the code
+    # recreates must not fall back to the umask default.
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     base = directory / f"debug-{tag}-{stamp}"
     try:
@@ -633,7 +641,7 @@ def make_driver(headless: bool, binary: str | None, geckodriver: str | None,
     if profile_dir:
         # A persistent profile keeps cookies and the session between runs, the
         # way a returning customer's browser would.
-        Path(profile_dir).mkdir(parents=True, exist_ok=True)
+        Path(profile_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         options.add_argument("-profile")
         options.add_argument(profile_dir)
     options.set_preference("intl.accept_languages", "sk,en")
@@ -643,7 +651,7 @@ def make_driver(headless: bool, binary: str | None, geckodriver: str | None,
     if download_dir:
         # folderList=2 means "use browser.download.dir"; upstream set the first
         # half and never the directory, so downloads landed nowhere defined.
-        Path(download_dir).mkdir(parents=True, exist_ok=True)
+        Path(download_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         options.set_preference("browser.download.dir", download_dir)
 
     service = Service(executable_path=geckodriver) if geckodriver else Service()
@@ -761,7 +769,8 @@ def resolve_settings(args, config: dict) -> dict:
         "delay": float(pick("delay", 45)),
         "url": pick("url", DEFAULT_URL),
         "person": pick("person", str(here / "person.txt")),
-        "ledger": pick("ledger", str(here / "tickets.json")),
+        "ledger": pick("ledger", str(STATE_LEDGER)
+                       if STATE_LEDGER.parent.is_dir() else str(here / "tickets.json")),
         "debug_dir": pick("debug_dir", str(here)),
         "train": pick("train"),
         "download_dir": pick("download_dir", None),
@@ -846,6 +855,12 @@ def main(argv: list[str] | None = None) -> int:
                         trip=trip)]
     else:
         routes = select_routes(load_routes(config), args.route)
+        if settings["train"]:
+            # CLI beats config: --train swaps the train on every selected route.
+            routes = [dataclasses.replace(route,
+                          trip=dataclasses.replace(route.trip,
+                                                   train=settings["train"]))
+                      for route in routes]
         if not routes:
             raise SystemExit("no enabled routes in the config -- enable one, add one, "
                              "or pass --route <id>")
@@ -879,6 +894,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     person = load_person(settings["person"])
+    if args.confirm and "example.com" in person.email:
+        raise SystemExit(
+            "person.txt still holds the example passenger - fill in the real "
+            "data first (web UI Nastavenia, or edit /etc/zssk/person.txt)")
     run_lock = acquire_run_lock(settings["ledger"])   # held until process exit
     assert run_lock is not None
     dry_run = not args.confirm

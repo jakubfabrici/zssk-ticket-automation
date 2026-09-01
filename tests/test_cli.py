@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+from pathlib import Path
 
 import pytest
 
@@ -105,3 +106,70 @@ def test_run_lock_is_exclusive(tmp_path):
     assert "in progress" in str(err.value)
     held.close()
     acquire_run_lock(str(ledger)).close()      # released lock is takeable again
+
+
+EXAMPLE_PERSON = """name = 'Meno'
+surname = 'Priezvisko'
+email = 'meno.priezvisko@example.com'
+train_card = '1234567'
+"""
+
+
+def write_person(tmp_path, text=EXAMPLE_PERSON):
+    path = tmp_path / "person.txt"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def test_confirm_refuses_the_example_passenger(tmp_path):
+    """Shipping example data must never be one --confirm away from buying."""
+    config = {"routes": [dict(CONFIG["routes"][0], enabled=True)]}
+    with pytest.raises(SystemExit) as err:
+        main(["--config", write_config(tmp_path, config), "--confirm",
+              "--person", write_person(tmp_path),
+              "--ledger", str(tmp_path / "ledger.json")])
+    assert "example" in str(err.value)
+    # the guard fires before the lock and the browser, so neither was created
+    assert not (tmp_path / "ledger.json.lock").exists()
+
+
+def test_list_still_works_with_the_example_passenger(tmp_path, capsys):
+    config = {"routes": [dict(CONFIG["routes"][0], enabled=True)]}
+    code = main(["--config", write_config(tmp_path, config), "--list",
+                 "--person", write_person(tmp_path),
+                 "--ledger", str(tmp_path / "ledger.json")])
+    assert code == 0
+    assert "tatran-ne" in capsys.readouterr().out
+
+
+def test_default_ledger_follows_the_deployed_state_dir(tmp_path, monkeypatch):
+    """A bare CLI run shares the deployed ledger (and therefore its lock)."""
+    import zssk_bulk
+    from zssk_bulk import build_parser, resolve_settings
+
+    state_ledger = tmp_path / "state" / "ledger.json"
+    monkeypatch.setattr(zssk_bulk, "STATE_LEDGER", state_ledger)
+    args = build_parser().parse_args(["--list"])
+
+    state_ledger.parent.mkdir(parents=True)
+    assert resolve_settings(args, {})["ledger"] == str(state_ledger)
+
+
+def test_default_ledger_falls_back_next_to_the_script(tmp_path, monkeypatch):
+    import zssk_bulk
+    from zssk_bulk import build_parser, resolve_settings
+
+    monkeypatch.setattr(zssk_bulk, "STATE_LEDGER", tmp_path / "state" / "ledger.json")
+    args = build_parser().parse_args(["--list"])
+    beside_script = Path(zssk_bulk.__file__).resolve().parent / "tickets.json"
+    assert resolve_settings(args, {})["ledger"] == str(beside_script)
+
+
+def test_train_flag_overrides_the_configured_train(tmp_path, capsys):
+    """CLI beats config: --train swaps the train on a routes-mode run."""
+    code = main(["--config", write_config(tmp_path, CONFIG), "--route",
+                 "tatran-ne", "--train", "IC 44", "--list",
+                 "--ledger", str(tmp_path / "ledger.json")])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "train IC 44" in out and "train EX 619" not in out

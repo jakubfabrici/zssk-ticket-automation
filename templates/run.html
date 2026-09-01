@@ -2,6 +2,7 @@
 {% block title %}Beh{% endblock %}
 {% block content %}
 <h1>Beh</h1>
+{% if cfg_error %}<p class="error">{{ cfg_error }}</p>{% endif %}
 {% if not ready %}
 <p class="error">Najprv vyplň osobné údaje v <a href="{{ url_for('settings') }}">Nastaveniach</a>.
    Bez nich sa nedá spustiť ani skúšobný beh.</p>
