@@ -346,7 +346,10 @@ class Ledger:
         return cls(path=p, entries=raw.get("entries", {}))
 
     def bought(self) -> set[str]:
-        return {k for k, v in self.entries.items() if v.get("status") == "bought"}
+        # "exists" = the shop reported a ticket issued outside this ledger;
+        # covered is covered, so re-runs must not retry the date.
+        return {k for k, v in self.entries.items()
+                if v.get("status") in ("bought", "exists")}
 
     def record(self, key: str, status: str, **fields) -> None:
         self.entries[key] = {
@@ -479,6 +482,13 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
         (BY_XPATH, "//button[contains(normalize-space(.),'Zaplatiť')]"),
     ],
 }
+
+
+class AlreadyIssued(RuntimeError):
+    """The shop refuses the date because a free ticket already exists for it.
+
+    Not a failure: the traveller IS covered (typically a manual purchase).
+    Recorded as "exists" so re-runs stop poking the date."""
 
 
 class StepFailed(RuntimeError):
@@ -693,6 +703,19 @@ def select_connection(driver, departure_time: str, train: str | None = None,
     raise StepFailed("select_connection", f"no result matching {wanted}")
 
 
+def page_error(driver) -> str:
+    """Text of the first visible server-side validation error, or ""."""
+    try:
+        for element in driver.find_elements(BY_CSS, "span.error-message, .error-message"):
+            if element.is_displayed():
+                text = (element.get_attribute("textContent") or "").strip()
+                if text:
+                    return text
+    except WebDriverException:
+        pass
+    return ""
+
+
 def _page_fingerprint(driver) -> str:
     try:
         elements = driver.find_elements(BY_CSS, "input[name='javax.faces.ViewState']")
@@ -868,6 +891,11 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
         fill_if_present(driver, step, value)
 
     click_continue(driver)             # Osobné údaje
+    error = page_error(driver)
+    if error:
+        if "existuje vydaný bezplatný lístok" in error:
+            raise AlreadyIssued(error)
+        raise StepFailed("personal", error)
     click(driver, "terms")
     click_continue(driver)             # Výber platby
 
@@ -1234,6 +1262,13 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 status = buy_one(driver, route.trip, day, person,
                                  settings["url"], dry_run)
+            except AlreadyIssued as exc:
+                detail = str(exc)[:120]
+                if not dry_run:
+                    ledger.record(route.trip.key(day), "exists", detail=detail)
+                results.append((day, "exists", detail))
+                log.info("%s: lístok už existuje, označujem ako pokrytý", day.isoformat())
+                continue
             except Exception as exc:
                 step = getattr(exc, "step", type(exc).__name__)
                 detail = str(exc).splitlines()[0][:120]

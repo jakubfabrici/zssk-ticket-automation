@@ -182,3 +182,12 @@ def test_already_departed_only_skips_todays_past_departures():
     assert already_departed(dt.date(2026, 9, 1), "20:01", now)   # boundary: gone
     assert not already_departed(dt.date(2026, 9, 1), "21:30", now)
     assert not already_departed(dt.date(2026, 9, 2), "16:58", now)
+
+
+def test_ledger_treats_exists_as_covered(tmp_path):
+    from zssk_bulk import Ledger
+    ledger = Ledger.load(tmp_path / "ledger.json")
+    ledger.record("2026-09-02|13:58|A->B", "exists", detail="uz vydany")
+    ledger.record("2026-09-03|13:58|A->B", "failed", detail="inde")
+    assert "2026-09-02|13:58|A->B" in ledger.bought()
+    assert "2026-09-03|13:58|A->B" not in ledger.bought()
