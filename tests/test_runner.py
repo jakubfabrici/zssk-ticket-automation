@@ -52,3 +52,19 @@ def test_fresh_runner_reports_idle():
     status = Runner().status()
     assert status == {"running": False, "returncode": None, "label": "",
                       "lines": [], "next_offset": 0}
+
+
+def test_stop_tolerates_already_reaped_process(monkeypatch):
+    runner = Runner()
+    runner.start([sys.executable, "-u", "-c",
+                  "import time; time.sleep(30)"], "race")
+    time.sleep(0.2)
+    import zssk_runner as zr
+
+    def raising_killpg(pgid, sig):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(zr.os, "killpg", raising_killpg)
+    runner.stop(grace=1)          # must not raise
+    monkeypatch.undo()
+    runner.stop(grace=2)          # real cleanup so the child does not linger

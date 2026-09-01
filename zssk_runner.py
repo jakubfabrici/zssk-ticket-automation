@@ -71,11 +71,17 @@ class Runner:
             thread = self._thread
         if proc is None or proc.poll() is not None:
             return
-        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
         try:
             proc.wait(timeout=grace)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait(timeout=5)
         if thread is not None:
             thread.join(timeout=5)
