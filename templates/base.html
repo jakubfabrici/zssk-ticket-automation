@@ -12,7 +12,7 @@
   {% if authed %}
   <nav>
     {# The guard lets this base render before Tasks 8 and 9 add their views. #}
-    {% for endpoint, label in [('routes_list', 'Trasy'), ('settings', 'Nastavenia'),
+    {% for endpoint, label in [('routes_list', 'Trasy'), ('calendar_view', 'Kalendár'), ('settings', 'Nastavenia'),
                                ('run_page', 'Beh'), ('history', 'História')] %}
       {% if endpoint in view_names %}<a href="{{ url_for(endpoint) }}">{{ label }}</a>{% endif %}
     {% endfor %}

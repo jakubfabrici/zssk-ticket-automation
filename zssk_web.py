@@ -6,6 +6,7 @@ deliberately has no idea how to drive a browser.
 """
 from __future__ import annotations
 
+import calendar as cal
 import datetime as dt
 import hmac
 import json
@@ -579,6 +580,54 @@ def register_views(app: Flask) -> None:
         app.config["RUNNER"].stop()
         flash("Beh zastavený.")
         return redirect(url_for("run_page"))
+
+    @app.route("/kalendar")
+    def calendar_view():
+        """Month grid: which day is covered, planned, or failed, at a glance."""
+        cfg = read_cfg_safe(app)
+        routes, cfg_error = safe_routes(app)
+        today = dt.date.today()
+        try:
+            year, month = (int(x) for x in request.args.get("mesiac", "").split("-"))
+            month_first = dt.date(year, month, 1)
+        except ValueError:
+            month_first = today.replace(day=1)
+
+        day_items: dict = {}
+        try:
+            ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
+            entries = ledger.entries
+        except SystemExit as exc:
+            entries = {}
+            cfg_error = cfg_error or f"Evidencia sa nedá načítať: {exc}"
+        for key, entry in entries.items():
+            try:
+                date_part, time_part, _ = key.split("|", 2)
+                day = dt.date.fromisoformat(date_part)
+            except ValueError:
+                continue
+            day_items.setdefault(day, []).append(
+                {"time": time_part, "status": entry.get("status", "failed")})
+        try:
+            for route in (r for r in routes if r.enabled):
+                planned, _ = route_overview(app, route)
+                for day in planned:
+                    day_items.setdefault(day, []).append(
+                        {"time": route.trip.time, "status": "planned"})
+        except ConfigError as exc:
+            cfg_error = cfg_error or str(exc)
+        for items in day_items.values():
+            items.sort(key=lambda item: (item["time"], item["status"]))
+
+        weeks = cal.Calendar(firstweekday=0).monthdatescalendar(
+            month_first.year, month_first.month)
+        horizon_end = today + dt.timedelta(
+            days=int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS)))
+        return render_template(
+            "calendar.html", weeks=weeks, month_first=month_first, today=today,
+            day_items=day_items, horizon_end=horizon_end, cfg_error=cfg_error,
+            prev_month=(month_first - dt.timedelta(days=1)).replace(day=1),
+            next_month=(month_first + dt.timedelta(days=32)).replace(day=1))
 
     @app.route("/history")
     def history():

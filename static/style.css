@@ -18,3 +18,19 @@ td, th { border-bottom: 1px solid #ddd; padding: .35rem .5rem; text-align: left;
 pre#log { background: #111; color: #dfe; padding: .8rem; min-height: 14rem;
           max-height: 28rem; overflow-y: auto; white-space: pre-wrap; }
 .inline { display: inline; }
+
+table.calendar { table-layout: fixed; margin-top: .5rem; }
+.cal-day { vertical-align: top; height: 4.6rem; padding: .25rem .3rem;
+           border-bottom: 1px solid #ddd; }
+.cal-day.other-month { opacity: .35; }
+.cal-day.today { outline: 2px solid #1d3557; outline-offset: -2px; }
+.cal-day.beyond { background: #f3f3f3; }
+.cal-num { font-size: .8rem; color: #666; display: block; }
+.chip { display: inline-block; font-size: .72rem; border-radius: 3px;
+        padding: 0 .3rem; margin: .1rem .1rem 0 0; color: #fff; }
+.chip-bought { background: #2a7a2a; }
+.chip-exists { background: #2a7a7a; }
+.chip-planned { background: #1d6fb8; }
+.chip-failed { background: #c0392b; }
+.legend .chip { margin-right: .6rem; }
+.cal-nav a { margin: 0 .8rem; text-decoration: none; }
