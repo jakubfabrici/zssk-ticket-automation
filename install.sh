@@ -22,6 +22,7 @@ STATE_DIR=/var/lib/zssk
 
 say "migrating local state out of the git working tree"
 mkdir -p "$ETC_DIR" "$STATE_DIR/debug" "$STATE_DIR/downloads" "$STATE_DIR/profile"
+chmod 0700 "$STATE_DIR/debug" "$STATE_DIR/downloads" "$STATE_DIR/profile"
 # Order matters: these run BEFORE the git reset below, which would otherwise
 # overwrite a filled-in person.txt (tracked upstream) and before git clean,
 # which would delete the ledger (untracked in the working tree).
@@ -162,8 +163,9 @@ systemctl enable zssk-web.service || true
 systemctl restart zssk-web.service || true
 if [ ! -e "$ETC_DIR/webui.env" ]; then
   if [ ! -s "$ETC_DIR/setup-token" ]; then
-    python3 -c 'import secrets; print(secrets.token_hex(8))' > "$ETC_DIR/setup-token"
-    chmod 0600 "$ETC_DIR/setup-token"
+    # 0600 from the first byte: the subshell umask applies before the redirect
+    # creates the file, so the token is never world-readable.
+    ( umask 077; python3 -c 'import secrets; print(secrets.token_hex(8))' > "$ETC_DIR/setup-token" )
   fi
   echo "   setup token (the /setup page asks for it once): $(cat "$ETC_DIR/setup-token")"
 fi
