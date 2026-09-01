@@ -131,6 +131,16 @@ def debug_dir(app: Flask, cfg: dict) -> Path:
     return Path(cfg.get("debug_dir") or app.config["STATE_DIR"] / "debug")
 
 
+def credentials_path(app: Flask, cfg: dict) -> Path:
+    return Path(cfg.get("credentials") or app.config["ETC_DIR"] / "credentials.env")
+
+
+def credentials_state(app: Flask, cfg: dict) -> str:
+    """The stored ZSSK konto user name, or "" when not configured."""
+    creds = zssk_bulk.load_credentials(credentials_path(app, cfg))
+    return creds[0] if creds else ""
+
+
 def person_ok(app: Flask) -> bool:
     try:
         person = zssk_bulk.load_person(person_path(app, read_cfg_safe(app)))
@@ -451,11 +461,25 @@ def register_views(app: Flask) -> None:
             except ValueError:
                 errors.append("Pauza musí byť číslo.")
                 delay = None
+            zssk_user = request.form.get("zssk_user", "").strip()
+            zssk_pass = request.form.get("zssk_pass", "")
+            if zssk_pass and not zssk_user:
+                errors.append("K heslu ZSSK konta zadaj aj prihlasovacie meno.")
+            if "\n" in zssk_pass or "\r" in zssk_pass:
+                errors.append("Heslo ZSSK konta nesmie obsahovať nový riadok.")
+            if zssk_user and not zssk_pass and not zssk_bulk.load_credentials(
+                    credentials_path(app, cfg)):
+                errors.append("Zadaj heslo ZSSK konta (zatiaľ nie je uložené).")
             if not errors:
                 zssk_bulk.save_person(
                     person_path(app, cfg),
                     zssk_bulk.Person(name=name, surname=surname,
                                      email=email, train_card=train_card))
+                if zssk_user:
+                    stored = zssk_bulk.load_credentials(credentials_path(app, cfg))
+                    save_env(credentials_path(app, cfg),
+                             {"ZSSK_USER": zssk_user,
+                              "ZSSK_PASS": zssk_pass or stored[1]})
                 def apply(config):
                     config["delay"] = delay
                 try:
@@ -474,13 +498,20 @@ def register_views(app: Flask) -> None:
             except (OSError, ValueError):
                 values = {}
             values = dict(values, delay=cfg.get("delay", 45))
-        return render_template("settings.html", errors=errors, values=values)
+        return render_template("settings.html", errors=errors, values=values,
+                               zssk_user=credentials_state(app, read_cfg_safe(app)))
 
     DEBUG_NAME_RE = re.compile(r"^debug-[A-Za-z0-9._-]+\.(png|html)$")
 
     def _run_context(app):
         routes, cfg_error = safe_routes(app)
         return [r for r in routes if r.enabled], person_ok(app), cfg_error
+
+    @app.route("/settings/zssk-delete", methods=["POST"])
+    def zssk_delete():
+        credentials_path(app, read_cfg_safe(app)).unlink(missing_ok=True)
+        flash("Uložené ZSSK prihlásenie odstránené.")
+        return redirect(url_for("settings"))
 
     @app.route("/run")
     def run_page():

@@ -59,3 +59,39 @@ def test_validation(client, field, value, fragment):
                                      **{field: value}))
     assert response.status_code == 200
     assert fragment in response.get_data(as_text=True)
+
+
+def test_zssk_credentials_roundtrip(client, tmp_path):
+    data = dict(PERSON, csrf=csrf(client),
+                zssk_user="jakub@example.org", zssk_pass="Tajne#Heslo1")
+    assert client.post("/settings", data=data).status_code == 302
+    creds = tmp_path / "etc" / "credentials.env"
+    assert (creds.stat().st_mode & 0o777) == 0o600
+    body = creds.read_text()
+    assert "ZSSK_USER=jakub@example.org" in body and "Tajne#Heslo1" in body
+    page = client.get("/settings").get_data(as_text=True)
+    assert "jakub@example.org" in page
+    assert "Tajne#Heslo1" not in page                  # write-only password
+
+
+def test_blank_password_keeps_the_stored_one(client, tmp_path):
+    client.post("/settings", data=dict(PERSON, csrf=csrf(client),
+                                       zssk_user="a@b.sk", zssk_pass="PrveHeslo1"))
+    client.post("/settings", data=dict(PERSON, csrf=csrf(client),
+                                       zssk_user="a@b.sk", zssk_pass=""))
+    assert "PrveHeslo1" in (tmp_path / "etc" / "credentials.env").read_text()
+
+
+def test_password_without_user_is_an_error(client, tmp_path):
+    response = client.post("/settings", data=dict(
+        PERSON, csrf=csrf(client), zssk_user="", zssk_pass="NieceHeslo1"))
+    assert response.status_code == 200
+    assert "prihlasovacie meno" in response.get_data(as_text=True)
+    assert not (tmp_path / "etc" / "credentials.env").exists()
+
+
+def test_delete_stored_credentials(client, tmp_path):
+    client.post("/settings", data=dict(PERSON, csrf=csrf(client),
+                                       zssk_user="a@b.sk", zssk_pass="PrveHeslo1"))
+    client.post("/settings/zssk-delete", data={"csrf": csrf(client)})
+    assert not (tmp_path / "etc" / "credentials.env").exists()

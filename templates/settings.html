@@ -14,9 +14,22 @@
       value="{{ values.get('email', '') }}" required></label>
   <label>Číslo registrácie ZSSK <input type="text" name="train_card"
       value="{{ values.get('train_card', '') }}" required></label>
+  <h2>ZSSK konto (lístky prídu aj do aplikácie)</h2>
+  {% if zssk_user %}<p>Prihlásenie je nastavené pre: <strong>{{ zssk_user }}</strong></p>
+  {% else %}<p>Prihlásenie nie je nastavené; nákup beží ako hosť a lístky chodia len e-mailom.</p>{% endif %}
+  <label>Prihlasovacie meno (e-mail ZSSK konta)
+    <input type="text" name="zssk_user" value="{{ zssk_user }}"></label>
+  <label>Heslo ZSSK konta (spätne sa nikdy nezobrazuje; prázdne = ponechať uložené)
+    <input type="password" name="zssk_pass" value=""></label>
   <h2>Beh</h2>
   <label>Pauza medzi nákupmi (sekundy, 15 až 600)
     <input type="number" name="delay" value="{{ values.get('delay', 45) }}"></label>
   <button type="submit">Uložiť</button>
 </form>
+{% if zssk_user %}
+<form method="post" action="{{ url_for('zssk_delete') }}">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <button type="submit" class="danger">Odstrániť uložené ZSSK prihlásenie</button>
+</form>
+{% endif %}
 {% endblock %}

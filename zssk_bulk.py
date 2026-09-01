@@ -53,6 +53,29 @@ DEFAULT_URL = "https://predaj.zssk.sk/search"
 # must share it with the deployed web UI and timer, so the two never buy the
 # same date twice; the run lock is derived from this path as well.
 STATE_LEDGER = Path("/var/lib/zssk/ledger.json")
+ETC_CREDENTIALS = Path("/etc/zssk/credentials.env")
+
+
+def load_credentials(path: str | os.PathLike[str]) -> tuple[str, str] | None:
+    """(user, password) from a KEY=VALUE env file, or None when not configured.
+
+    Logging in binds the purchase to the ZSSK konto, which is what makes the
+    ticket show up in the mobile app instead of only in the mailbox.
+    """
+    p = Path(path)
+    if not p.exists():
+        return None
+    values: dict[str, str] = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip()
+    user = values.get("ZSSK_USER", "")
+    password = values.get("ZSSK_PASS", "")
+    if not user or not password:
+        return None
+    return user, password
 
 WEEKDAY_NAMES = {
     "mon": 0, "po": 0, "pon": 0,
@@ -410,6 +433,23 @@ SELECTORS: dict[str, list[tuple[str, str]]] = {
         (BY_XPATH, "//input[contains(@id,'cislo-registracie')]"),
         (BY_XPATH, "//input[contains(@id,'registracie')]"),
     ],
+    "login_link": [
+        (BY_XPATH, "//a[contains(normalize-space(.),'Prihlásiť') "
+                   "and not(contains(normalize-space(.),'konto'))]"),
+    ],
+    "login_user": [
+        (BY_CSS, "input[type='email']"),
+        (BY_CSS, "input[id*='mail']"),
+        (BY_CSS, "input[id*='user']"),
+        (BY_CSS, "input[name*='user']"),
+        (BY_CSS, "input[id*='login']"),
+    ],
+    "login_pass": [(BY_CSS, "input[type='password']")],
+    "login_submit": [
+        (BY_XPATH, "//button[contains(normalize-space(.),'Prihlásiť')]"),
+        (BY_XPATH, "//input[@type='submit' and contains(@value,'Prihlás')]"),
+        (BY_CSS, "button[type='submit']"),
+    ],
     "pax_reveal": [
         (BY_XPATH, "//a[contains(normalize-space(.),'Vyhľadanie zliav v ZSSK konte')]"),
         (BY_CSS, "a.ageCategory-filter-block-extend"),
@@ -685,6 +725,33 @@ def click_continue(driver, timeout: float = 25.0) -> None:
     log.warning("continue: no visible page change within %.0fs", timeout)
 
 
+def login(driver, url: str, user: str, password: str) -> None:
+    """Sign into the ZSSK konto; raise StepFailed when the header still says
+    "Neprihlásený" afterwards. Callers must NOT fall back to a guest purchase:
+    when credentials are configured, the app delivery is the whole point.
+    """
+    driver.get(url)
+    click(driver, "login_link")
+    element = find(driver, "login_user")
+    element.clear()
+    element.send_keys(user)
+    element = find(driver, "login_pass")
+    element.clear()
+    element.send_keys(password)
+    click(driver, "login_submit")
+    deadline = time.monotonic() + 25
+    while time.monotonic() < deadline:
+        try:
+            body = driver.find_element(BY_XPATH, "//body").get_attribute("textContent") or ""
+        except WebDriverException:
+            body = ""
+        if "Používateľ" in body and "Neprihlásený" not in body:
+            log.info("prihlásený do ZSSK konta")
+            return
+        time.sleep(0.5)
+    raise StepFailed("login", "the header still shows Neprihlásený")
+
+
 def dump_state(driver, tag: str, directory: Path) -> Path | None:
     """Screenshot + page source, so a broken step is diagnosable afterwards."""
     # mode=0o700: these dumps carry personal data, and a directory the code
@@ -882,6 +949,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Where failure dumps go (default {here}).")
     parser.add_argument("--download-dir", default=None,
                         help="Directory Firefox saves files into.")
+    parser.add_argument("--credentials", default=None,
+                        help="Env file with ZSSK_USER/ZSSK_PASS; when present, "
+                             "the run signs into the ZSSK konto first and "
+                             "refuses to continue as a guest on failure.")
 
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--list", action="store_true",
@@ -934,6 +1005,9 @@ def resolve_settings(args, config: dict) -> dict:
         "debug_dir": pick("debug_dir", str(here)),
         "train": pick("train"),
         "download_dir": pick("download_dir", None),
+        "credentials": pick("credentials", str(ETC_CREDENTIALS)
+                            if ETC_CREDENTIALS.parent.is_dir()
+                            else str(here / "credentials.env")),
         "profile_dir": pick("profile_dir", None),
     }
     return settings
@@ -1095,9 +1169,22 @@ def main(argv: list[str] | None = None) -> int:
     debug_dir = Path(settings["debug_dir"])
     results: list[tuple[dt.date, str, str]] = []
     consecutive_failures = 0
+    credentials = load_credentials(settings["credentials"])
     driver = make_driver(args.headless, args.browser_binary, args.geckodriver,
                          settings["profile_dir"], settings["download_dir"])
     try:
+        if credentials:
+            try:
+                login(driver, settings["url"], *credentials)
+            except Exception as exc:
+                detail = str(exc).splitlines()[0][:120]
+                dump_state(driver, "login", debug_dir)
+                driver.quit()
+                raise SystemExit(
+                    "ZSSK konto login failed and credentials ARE configured - "
+                    "refusing to buy as a guest (the app delivery would be "
+                    f"silently lost): {detail}")
+
         for index, (route, day) in enumerate(work):
             if index:
                 log.info("waiting %.0fs before the next purchase", settings["delay"])
