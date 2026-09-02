@@ -839,10 +839,25 @@ def login(driver, url: str, user: str, password: str) -> None:
         if not on_aut or _logged_in(driver):
             break
         time.sleep(0.5)
+    # Still on the SPA? Capture ITS error text and state BEFORE navigating
+    # away, or the reason (wrong password, lockout, captcha) is lost.
+    spa_note = ""
+    try:
+        if "/aut" in (driver.current_url or ""):
+            body = driver.find_element(BY_XPATH, "//body").get_attribute("textContent") or ""
+            for mark in ("esprávn", "zablokovan", "amknut", "captcha", "overte",
+                         "robot", "pokus", "neexistuje", "Chyba"):
+                idx = body.find(mark)
+                if idx >= 0:
+                    spa_note = " ".join(body[max(0, idx - 60):idx + 120].split())
+                    break
+            dump_state(driver, "login-spa", Path("/var/lib/zssk/debug"))
+    except WebDriverException:
+        pass
     driver.get(url)
     time.sleep(1.0)
     if not _logged_in(driver):
-        raise StepFailed("login", "hlavička e-shopu stále nehlási prihláseného")
+        raise StepFailed("login", spa_note or "hlavička e-shopu stále nehlási prihláseného")
     log.info("prihlásený do ZSSK konta")
 
 
