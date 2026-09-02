@@ -191,3 +191,12 @@ def test_ledger_treats_exists_as_covered(tmp_path):
     ledger.record("2026-09-03|13:58|A->B", "failed", detail="inde")
     assert "2026-09-02|13:58|A->B" in ledger.bought()
     assert "2026-09-03|13:58|A->B" not in ledger.bought()
+
+
+def test_discount_id_resolves_cli_over_config(tmp_path):
+    from zssk_bulk import build_parser, resolve_settings
+    args = build_parser().parse_args(["--list"])
+    assert resolve_settings(args, {})["discount_id"] is None
+    assert resolve_settings(args, {"discount_id": "617"})["discount_id"] == "617"
+    args = build_parser().parse_args(["--list", "--discount-id", "600"])
+    assert resolve_settings(args, {"discount_id": "617"})["discount_id"] == "600"

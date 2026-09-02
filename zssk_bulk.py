@@ -533,7 +533,7 @@ def click(driver, step: str, timeout: float = 15.0) -> None:
 # --------------------------------------------------------------------------
 
 def pick_from_dropdown(driver, toggle_step: str, option_step: str,
-                       timeout: float = 20.0) -> None:
+                       timeout: float = 20.0, candidates=None) -> None:
     """Open toggle_step's dropdown as needed and click option_step.
 
     The passenger panel re-renders over AJAX after every selection and
@@ -543,8 +543,9 @@ def pick_from_dropdown(driver, toggle_step: str, option_step: str,
     """
     deadline = time.monotonic() + timeout
     last = ""
+    option_candidates = candidates or SELECTORS[option_step]
     while time.monotonic() < deadline:
-        for by, value in SELECTORS[option_step]:
+        for by, value in option_candidates:
             try:
                 for element in driver.find_elements(by, value):
                     if element.is_displayed():
@@ -748,6 +749,38 @@ def page_error(driver) -> str:
     return ""
 
 
+def pick_konto_profile(driver, person: Person) -> bool:
+    """Type the first name and click the konto's saved-passenger suggestion.
+
+    A profile-bound passenger is what makes the ticket carry the konto's
+    entitlements (ISIC/BČK line) exactly like a manual purchase. Falls back
+    to False when no suggestion shows (guest flow, offline mock).
+    """
+    try:
+        element = find(driver, "first_name", timeout=5)
+    except StepFailed:
+        return False
+    element.clear()
+    for ch in person.name:
+        element.send_keys(ch)
+        time.sleep(0.25)
+    wanted = person.surname.upper()
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline:
+        try:
+            for item in driver.find_elements(BY_CSS, "li"):
+                if item.is_displayed() and wanted in (item.text or "").upper():
+                    item.click()
+                    log.info("cestujúci naviazaný na ZSSK konto profil: %s",
+                             (item.text or "").strip()[:60])
+                    time.sleep(2)
+                    return True
+        except WebDriverException:
+            pass
+        time.sleep(0.4)
+    return False
+
+
 def _page_fingerprint(driver) -> str:
     try:
         elements = driver.find_elements(BY_CSS, "input[name='javax.faces.ViewState']")
@@ -879,7 +912,7 @@ def dump_state(driver, tag: str, directory: Path) -> Path | None:
 
 
 def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
-            dry_run: bool = True) -> str:
+            dry_run: bool = True, discount_id: str | None = None) -> str:
     """Walk the checkout for one date. Returns "bought" or "dry-run".
 
     Raises StepFailed with the step that broke, which the caller records and
@@ -903,7 +936,13 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     # free-transport entitlement ticked -- that combination is what makes the
     # fare zero.
     pick_from_dropdown(driver, "passenger_type", "passenger_young")
-    pick_from_dropdown(driver, "card_type", "card_student")
+    if discount_id:
+        # e.g. 617 = "ISIC/BČK aktivované školou SR"; the summary then prints
+        # the same discount line a manual konto purchase gets.
+        pick_from_dropdown(driver, "card_type", "card_student", candidates=[
+            (BY_XPATH, f"//li[@data-discount-type-id='{discount_id}']")])
+    else:
+        pick_from_dropdown(driver, "card_type", "card_student")
     ensure_checked(driver, "free_transport")
 
     # Live flow 2026-09: the passenger card asks for the traveller identity
@@ -927,13 +966,13 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
     element = find(driver, "email")
     element.clear()
     element.send_keys(person.email)
-    # On the live 2026-09 flow the identity is already bound on the passenger
-    # card, so these later fields may legitimately be gone.
-    for step, value in (("first_name", person.name),
-                        ("last_name", person.surname),
-                        ("registration", person.train_card),
-                        ("personal_identification", person.train_card)):
-        fill_if_present(driver, step, value)
+    if not pick_konto_profile(driver, person):
+        # No konto suggestion (guest flow or offline mock): manual fill.
+        for step, value in (("first_name", person.name),
+                            ("last_name", person.surname),
+                            ("registration", person.train_card),
+                            ("personal_identification", person.train_card)):
+            fill_if_present(driver, step, value)
 
     click_continue(driver)             # Osobné údaje
     error = page_error(driver)
@@ -1062,6 +1101,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Where failure dumps go (default {here}).")
     parser.add_argument("--download-dir", default=None,
                         help="Directory Firefox saves files into.")
+    parser.add_argument("--discount-id", default=None,
+                        help="data-discount-type-id to pick instead of the "
+                             "student card, e.g. 617 for ISIC/BČK.")
     parser.add_argument("--credentials", default=None,
                         help="Env file with ZSSK_USER/ZSSK_PASS; when present, "
                              "the run signs into the ZSSK konto first and "
@@ -1118,6 +1160,7 @@ def resolve_settings(args, config: dict) -> dict:
         "debug_dir": pick("debug_dir", str(here)),
         "train": pick("train"),
         "download_dir": pick("download_dir", None),
+        "discount_id": pick("discount_id", None),
         "credentials": pick("credentials", str(ETC_CREDENTIALS)
                             if ETC_CREDENTIALS.parent.is_dir()
                             else str(here / "credentials.env")),
@@ -1314,7 +1357,8 @@ def main(argv: list[str] | None = None) -> int:
                      day.isoformat(), route.trip.time)
             try:
                 status = buy_one(driver, route.trip, day, person,
-                                 settings["url"], dry_run)
+                                 settings["url"], dry_run,
+                                 discount_id=settings["discount_id"])
             except AlreadyIssued as exc:
                 detail = str(exc)[:120]
                 if not dry_run:
