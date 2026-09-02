@@ -1288,7 +1288,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if credentials:
             try:
-                login(driver, settings["url"], *credentials)
+                try:
+                    login(driver, settings["url"], *credentials)
+                except Exception as first:
+                    # The /aut SPA occasionally stalls on first load; one
+                    # retry absorbs that without masking real failures.
+                    log.warning("prihlásenie zlyhalo (%s), skúšam ešte raz",
+                                str(first).splitlines()[0][:80])
+                    time.sleep(5)
+                    login(driver, settings["url"], *credentials)
             except Exception as exc:
                 detail = str(exc).splitlines()[0][:120]
                 dump_state(driver, "login", debug_dir)
