@@ -74,3 +74,18 @@ def test_path_helpers_create_dirs_0700(tmp_path):
     s = user_state(tmp_path, "jakub")
     assert (s / "debug").is_dir() and (s / "profile").stat().st_mode & 0o777 == 0o700
     assert person_file(tmp_path, "jakub") == tmp_path / "users" / "jakub" / "person.txt"
+
+
+def test_path_helpers_reject_bad_uid(tmp_path):
+    for bad in ("../escape", "a/b", "..", "Bad", ""):
+        with pytest.raises(ValueError):
+            user_etc(tmp_path, bad)
+        with pytest.raises(ValueError):
+            user_state(tmp_path, bad)
+
+
+def test_users_parent_dir_is_0700(tmp_path):
+    user_etc(tmp_path, "jakub")
+    assert (tmp_path / "users").stat().st_mode & 0o777 == 0o700
+    user_state(tmp_path, "jakub")
+    assert (tmp_path / "users").stat().st_mode & 0o777 == 0o700

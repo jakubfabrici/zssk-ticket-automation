@@ -42,10 +42,16 @@ def _mkdir_0700(path: Path) -> Path:
 
 
 def user_etc(etc_dir: Path, uid: str) -> Path:
+    if not valid_uid(uid):
+        raise ValueError(f"neplatný uid: {uid!r}")
+    _mkdir_0700(Path(etc_dir) / "users")
     return _mkdir_0700(Path(etc_dir) / "users" / uid)
 
 
 def user_state(state_dir: Path, uid: str) -> Path:
+    if not valid_uid(uid):
+        raise ValueError(f"neplatný uid: {uid!r}")
+    _mkdir_0700(Path(state_dir) / "users")
     base = _mkdir_0700(Path(state_dir) / "users" / uid)
     for sub in ("debug", "downloads", "profile"):
         _mkdir_0700(base / sub)
