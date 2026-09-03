@@ -185,3 +185,69 @@ class UserStore:
         data = self.load()
         data["users"][uid]["password_hash"] = password_hash
         self._save(data)
+
+
+def _load_env(path: Path) -> dict:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip()
+    return values
+
+
+def migrate_single_user(etc_dir: Path, state_dir: Path,
+                        admin_uid: str = "jakub") -> bool:
+    """Fold the old single-user layout into an admin user. Idempotent.
+
+    Runs only when users.json is absent and the old webui.env exists, so a
+    fresh multi-user install and a second boot both skip it.
+    """
+    etc_dir, state_dir = Path(etc_dir), Path(state_dir)
+    store = UserStore(etc_dir)
+    old_env = etc_dir / "webui.env"
+    if store.path.exists() or not old_env.exists():
+        return False
+
+    env = _load_env(old_env)
+
+    # Move the DATA first; write users.json LAST as the completion marker. A
+    # crash before that marker just leaves the old files in place and the next
+    # start retries the whole migration, so Jakub never ends up with an empty
+    # account. Dirs are created 0700 / files land under 0700 parents.
+    dest_etc = user_etc(etc_dir, admin_uid)
+    for name in ("person.txt", "credentials.env", "routes.json"):
+        src = etc_dir / name
+        if src.exists() and not src.is_symlink():
+            src.replace(dest_etc / name)
+    person = dest_etc / "person.txt"
+    creds = dest_etc / "credentials.env"
+    for f in (person, creds):
+        if f.exists():
+            f.chmod(0o600)
+
+    dest_state = user_state(state_dir, admin_uid)
+    for name in ("ledger.json", "tickets.json"):
+        src = state_dir / name
+        if src.exists():
+            src.replace(dest_state / "ledger.json")
+            break
+    for sub in ("debug", "downloads", "profile"):
+        src = state_dir / sub
+        if src.is_dir():
+            for item in src.iterdir():
+                if not item.is_symlink():
+                    item.replace(dest_state / sub / item.name)
+
+    # Only now the registry + the marker rename. add() writes users.json, which
+    # is exactly the "done" flag the guard at the top checks.
+    store.add(admin_uid, is_admin=True)
+    if env.get("ZSSK_WEBUI_HASH"):
+        store.set_hash(admin_uid, env["ZSSK_WEBUI_HASH"])
+    if env.get("ZSSK_WEBUI_SECRET"):
+        data = store.load()
+        data["secret"] = env["ZSSK_WEBUI_SECRET"]
+        store._save(data)
+    old_env.replace(etc_dir / "webui.env.migrated")
+    return True
