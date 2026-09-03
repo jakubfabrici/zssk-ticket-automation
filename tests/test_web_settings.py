@@ -4,6 +4,7 @@ import re
 import pytest
 
 import zssk_web
+import zssk_users
 from zssk_bulk import load_person
 from zssk_runner import Runner
 
@@ -21,7 +22,7 @@ def client(tmp_path):
     app.config["TESTING"] = True
     client = app.test_client()
     client.get("/setup")
-    client.post("/setup", data={"password": "tajneheslo1",
+    client.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
                                 "password2": "tajneheslo1"})
     return client
 
@@ -33,10 +34,10 @@ def csrf(client):
 def test_save_person_and_delay(client, tmp_path):
     response = client.post("/settings", data=dict(PERSON, csrf=csrf(client)))
     assert response.status_code == 302
-    path = tmp_path / "etc" / "person.txt"
+    path = zssk_users.person_file(tmp_path / "etc", "jakub")
     assert (path.stat().st_mode & 0o777) == 0o600
     assert load_person(path).surname == "Fabrici"
-    cfg = json.loads((tmp_path / "etc" / "routes.json").read_text())
+    cfg = json.loads(zssk_users.routes_file(tmp_path / "etc", "jakub").read_text())
     assert cfg["delay"] == 45.0
 
 
@@ -65,7 +66,7 @@ def test_zssk_credentials_roundtrip(client, tmp_path):
     data = dict(PERSON, csrf=csrf(client),
                 zssk_user="jakub@example.org", zssk_pass="Tajne#Heslo1")
     assert client.post("/settings", data=data).status_code == 302
-    creds = tmp_path / "etc" / "credentials.env"
+    creds = zssk_users.credentials_file(tmp_path / "etc", "jakub")
     assert (creds.stat().st_mode & 0o777) == 0o600
     body = creds.read_text()
     assert "ZSSK_USER=jakub@example.org" in body and "Tajne#Heslo1" in body
@@ -79,7 +80,7 @@ def test_blank_password_keeps_the_stored_one(client, tmp_path):
                                        zssk_user="a@b.sk", zssk_pass="PrveHeslo1"))
     client.post("/settings", data=dict(PERSON, csrf=csrf(client),
                                        zssk_user="a@b.sk", zssk_pass=""))
-    assert "PrveHeslo1" in (tmp_path / "etc" / "credentials.env").read_text()
+    assert "PrveHeslo1" in zssk_users.credentials_file(tmp_path / "etc", "jakub").read_text()
 
 
 def test_password_without_user_is_an_error(client, tmp_path):
@@ -87,11 +88,11 @@ def test_password_without_user_is_an_error(client, tmp_path):
         PERSON, csrf=csrf(client), zssk_user="", zssk_pass="NieceHeslo1"))
     assert response.status_code == 200
     assert "prihlasovacie meno" in response.get_data(as_text=True)
-    assert not (tmp_path / "etc" / "credentials.env").exists()
+    assert not zssk_users.credentials_file(tmp_path / "etc", "jakub").exists()
 
 
 def test_delete_stored_credentials(client, tmp_path):
     client.post("/settings", data=dict(PERSON, csrf=csrf(client),
                                        zssk_user="a@b.sk", zssk_pass="PrveHeslo1"))
     client.post("/settings/zssk-delete", data={"csrf": csrf(client)})
-    assert not (tmp_path / "etc" / "credentials.env").exists()
+    assert not zssk_users.credentials_file(tmp_path / "etc", "jakub").exists()

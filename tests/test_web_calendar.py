@@ -5,6 +5,7 @@ import re
 import pytest
 
 import zssk_web
+import zssk_users
 from zssk_runner import Runner
 
 CSRF_RE = re.compile(r'name="csrf" value="([0-9a-f]+)"')
@@ -17,7 +18,7 @@ def client(tmp_path):
     app.config["TESTING"] = True
     client = app.test_client()
     client.get("/setup")
-    client.post("/setup", data={"password": "tajneheslo1",
+    client.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
                                 "password2": "tajneheslo1"})
     return client
 
@@ -30,11 +31,11 @@ def test_calendar_renders_with_nav(client):
 
 
 def test_calendar_shows_ledger_and_planned_chips(client, tmp_path):
-    (tmp_path / "etc" / "routes.json").write_text(json.dumps({"routes": [
+    zssk_users.routes_file(tmp_path / "etc", "jakub").write_text(json.dumps({"routes": [
         {"id": "r", "departure": "A", "arrival": "B", "time": "07:12",
          "weekdays": "", "max": 3, "enabled": True}]}))
     tomorrow = dt.date.today() + dt.timedelta(days=1)
-    (tmp_path / "state" / "ledger.json").write_text(json.dumps({"entries": {
+    zssk_users.ledger_file(tmp_path / "state", "jakub").write_text(json.dumps({"entries": {
         f"{dt.date.today().isoformat()}|16:58|A->B":
             {"status": "bought", "at": "x"},
         f"{tomorrow.isoformat()}|13:58|A->B":
@@ -51,5 +52,5 @@ def test_calendar_month_param_and_bad_input(client):
 
 
 def test_calendar_survives_broken_config(client, tmp_path):
-    (tmp_path / "etc" / "routes.json").write_text("{ nie json")
+    zssk_users.routes_file(tmp_path / "etc", "jakub").write_text("{ nie json")
     assert client.get("/kalendar").status_code == 200

@@ -6,6 +6,7 @@ import time
 import pytest
 
 import zssk_web
+import zssk_users
 from zssk_runner import Runner
 
 CSRF_RE = re.compile(r'name="csrf" value="([0-9a-f]+)"')
@@ -34,9 +35,9 @@ def env(tmp_path):
     app.config["TESTING"] = True
     client = app.test_client()
     client.get("/setup")
-    client.post("/setup", data={"password": "tajneheslo1",
+    client.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
                                 "password2": "tajneheslo1"})
-    (tmp_path / "etc" / "routes.json").write_text(json.dumps(ROUTES))
+    zssk_users.routes_file(tmp_path / "etc", "jakub").write_text(json.dumps(ROUTES))
     return client, tmp_path, argv_file
 
 
@@ -135,10 +136,10 @@ def test_second_start_while_running_flashes_busy(env, tmp_path):
 
 def test_history_lists_ledger_and_debug_files(env):
     client, tmp_path, _ = env
-    state = tmp_path / "state"
-    (state / "debug").mkdir(parents=True, exist_ok=True)
-    (state / "debug" / "debug-2026-09-07-select_connection-x.png").write_bytes(b"png")
-    (state / "ledger.json").write_text(json.dumps({"entries": {
+    debug = zssk_users.debug_dir(tmp_path / "state", "jakub")
+    debug.mkdir(parents=True, exist_ok=True)
+    (debug / "debug-2026-09-07-select_connection-x.png").write_bytes(b"png")
+    zssk_users.ledger_file(tmp_path / "state", "jakub").write_text(json.dumps({"entries": {
         "2026-09-07|16:58|SNV->Košice": {"status": "bought",
                                           "at": "2026-09-01T12:00:00"}}}))
     page = client.get("/history").get_data(as_text=True)
@@ -148,6 +149,6 @@ def test_history_lists_ledger_and_debug_files(env):
 
 def test_debug_file_names_are_whitelisted(env):
     client, tmp_path, _ = env
-    (tmp_path / "state" / "debug").mkdir(parents=True, exist_ok=True)
+    zssk_users.debug_dir(tmp_path / "state", "jakub").mkdir(parents=True, exist_ok=True)
     assert client.get("/debug/../../etc/webui.env").status_code in (400, 404)
     assert client.get("/debug/evil.txt").status_code == 404

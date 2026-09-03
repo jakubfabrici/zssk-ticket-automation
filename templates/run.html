@@ -38,6 +38,11 @@ async function poll() {
   const response = await fetch('{{ url_for("run_status") }}?offset=' + off);
   const status = await response.json();
   off = status.next_offset;
+  if (status.foreign) {
+    document.getElementById('state').textContent =
+      'prebieha nákup iného používateľa, skús o chvíľu';
+    return;
+  }
   if (status.lines.length) {
     const pre = document.getElementById('log');
     pre.textContent += status.lines.join('\n') + '\n';

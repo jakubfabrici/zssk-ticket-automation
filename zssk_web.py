@@ -218,10 +218,6 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
     state_dir.mkdir(parents=True, exist_ok=True)
     app.config.update(
         ETC_DIR=etc_dir, STATE_DIR=state_dir,
-        # ROUTES_PATH is dead single-user config, kept only as a harmless
-        # pointer so the still-unconverted views in register_views (Task
-        # 4/5 territory) keep working until they are rewired per-user.
-        ROUTES_PATH=etc_dir / "routes.json",
         RUNNER=runner,
         BULK_ARGV=list(bulk_argv or DEFAULT_BULK_ARGV),
         FAIL_DELAY=fail_delay,
@@ -417,6 +413,7 @@ def register_views(app: Flask) -> None:
     """Routes CRUD, settings, run and history views (Tasks 7 to 9)."""
 
     @app.route("/routes")
+    @login_required
     def routes_list():
         routes, cfg_error = safe_routes(app)
         cards = []
@@ -430,6 +427,7 @@ def register_views(app: Flask) -> None:
         return render_template("routes.html", cards=cards, cfg_error=cfg_error)
 
     @app.route("/routes/new", methods=["GET", "POST"])
+    @login_required
     def route_new():
         try:
             cfg = normalized_cfg(app)
@@ -466,6 +464,7 @@ def register_views(app: Flask) -> None:
         abort(404)
 
     @app.route("/routes/<rid>/edit", methods=["GET", "POST"])
+    @login_required
     def route_edit(rid):
         try:
             cfg = normalized_cfg(app)
@@ -488,6 +487,7 @@ def register_views(app: Flask) -> None:
                                editing=rid)
 
     @app.route("/routes/<rid>/delete", methods=["POST"])
+    @login_required
     def route_delete(rid):
         def apply(cfg):
             _find(cfg, rid)
@@ -501,6 +501,7 @@ def register_views(app: Flask) -> None:
         return redirect(url_for("routes_list"))
 
     @app.route("/routes/<rid>/toggle", methods=["POST"])
+    @login_required
     def route_toggle(rid):
         def apply(cfg):
             raw = _find(cfg, rid)
@@ -512,6 +513,7 @@ def register_views(app: Flask) -> None:
         return redirect(url_for("routes_list"))
 
     @app.route("/settings", methods=["GET", "POST"])
+    @login_required
     def settings():
         cfg = read_cfg_safe(app)
         errors: list[str] = []
@@ -583,12 +585,14 @@ def register_views(app: Flask) -> None:
         return [r for r in routes if r.enabled], person_ok(app), cfg_error
 
     @app.route("/settings/zssk-delete", methods=["POST"])
+    @login_required
     def zssk_delete():
         credentials_path(app, read_cfg_safe(app)).unlink(missing_ok=True)
         flash("Uložené ZSSK prihlásenie odstránené.")
         return redirect(url_for("settings"))
 
     @app.route("/run")
+    @login_required
     def run_page():
         routes, ready, cfg_error = _run_context(app)
         status = app.config["RUNNER"].status()
@@ -604,6 +608,7 @@ def register_views(app: Flask) -> None:
         return route_id, routes, ready, cfg_error
 
     @app.route("/run/confirm", methods=["POST"])
+    @login_required
     def run_confirm():
         route_id, routes, ready, cfg_error = _selected(app)
         if cfg_error:
@@ -620,6 +625,7 @@ def register_views(app: Flask) -> None:
                                route_id=route_id)
 
     @app.route("/run/start", methods=["POST"])
+    @login_required
     def run_start():
         mode = request.form.get("mode", "dry-run")
         if mode not in ("dry-run", "confirm"):
@@ -630,32 +636,54 @@ def register_views(app: Flask) -> None:
             return redirect(url_for("run_page"))
         if not ready or not routes:
             abort(400)
+        etc, state = app.config["ETC_DIR"], app.config["STATE_DIR"]
+        uid = current_uid()
         argv = list(app.config["BULK_ARGV"]) + [
-            "--config", str(app.config["ROUTES_PATH"])]
+            "--config", str(zssk_users.routes_file(etc, uid)),
+            "--person", str(zssk_users.person_file(etc, uid)),
+            "--credentials", str(zssk_users.credentials_file(etc, uid)),
+            "--ledger", str(zssk_users.ledger_file(state, uid)),
+            "--debug-dir", str(zssk_users.debug_dir(state, uid)),
+            "--profile-dir", str(zssk_users.profile_dir(state, uid)),
+            "--download-dir", str(zssk_users.downloads_dir(state, uid))]
         if route_id:
             argv += ["--route", route_id]
         argv.append("--confirm" if mode == "confirm" else "--dry-run")
-        label = ("NÁKUP" if mode == "confirm" else "skúšobný beh")
+        label = f"{uid}: {'NÁKUP' if mode == 'confirm' else 'skúšobný beh'}"
         label += f" ({route_id or 'všetky zapnuté trasy'})"
         try:
-            app.config["RUNNER"].start(argv, label)
+            app.config["RUNNER"].start(argv, label, owner=uid)
             flash(f"Spustené: {label}")
         except RunnerBusy as busy:
             flash(f"Už beží: {busy}. Počkaj, alebo beh zastav.")
         return redirect(url_for("run_page"))
 
     @app.route("/run/status")
+    @login_required
     def run_status():
         offset = request.args.get("offset", 0, type=int)
-        return jsonify(app.config["RUNNER"].status(offset))
+        status = app.config["RUNNER"].status(offset)
+        if status["owner"] and status["owner"] != current_uid():
+            return jsonify({"running": status["running"], "returncode": None,
+                            "label": "", "lines": [], "next_offset": offset,
+                            "owner": status["owner"], "foreign": True})
+        return jsonify(status)
 
     @app.route("/run/stop", methods=["POST"])
+    @login_required
     def run_stop():
+        status = app.config["RUNNER"].status()
+        owner = status.get("owner")
+        user = current_user(app)
+        if owner and owner != current_uid() and not (user or {}).get("is_admin"):
+            flash("Beží nákup iného používateľa, nemôžeš ho zastaviť.")
+            return redirect(url_for("run_page"))
         app.config["RUNNER"].stop()
         flash("Beh zastavený.")
         return redirect(url_for("run_page"))
 
     @app.route("/kalendar")
+    @login_required
     def calendar_view():
         """Month grid: which day is covered, planned, or failed, at a glance."""
         cfg = read_cfg_safe(app)
@@ -704,6 +732,7 @@ def register_views(app: Flask) -> None:
             next_month=(month_first + dt.timedelta(days=32)).replace(day=1))
 
     @app.route("/history")
+    @login_required
     def history():
         cfg = read_cfg_safe(app)
         cfg_error = None
@@ -721,6 +750,7 @@ def register_views(app: Flask) -> None:
                                cfg_error=cfg_error)
 
     @app.route("/debug/<path:name>")
+    @login_required
     def debug_file(name):
         if not DEBUG_NAME_RE.fullmatch(name):
             abort(404)

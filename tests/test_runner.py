@@ -51,7 +51,18 @@ def test_stop_terminates_the_process_group():
 def test_fresh_runner_reports_idle():
     status = Runner().status()
     assert status == {"running": False, "returncode": None, "label": "",
-                      "lines": [], "next_offset": 0}
+                      "lines": [], "next_offset": 0, "owner": None}
+
+
+def test_start_tags_the_run_with_its_owner():
+    runner = Runner()
+    runner.start([sys.executable, "-u", "-c",
+                  "import time; time.sleep(30)"], "beh", owner="jakub")
+    try:
+        assert runner.owner == "jakub"
+        assert runner.status()["owner"] == "jakub"
+    finally:
+        runner.stop(grace=2)
 
 
 def test_stop_tolerates_already_reaped_process(monkeypatch):

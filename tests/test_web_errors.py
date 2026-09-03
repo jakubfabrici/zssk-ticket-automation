@@ -10,6 +10,7 @@ import re
 import pytest
 
 import zssk_web
+import zssk_users
 from zssk_runner import Runner
 
 CSRF_RE = re.compile(r'name="csrf" value="([0-9a-f]+)"')
@@ -27,14 +28,14 @@ def client(tmp_path):
     app.config["TESTING"] = True
     client = app.test_client()
     client.get("/setup")
-    client.post("/setup", data={"password": "tajneheslo1",
+    client.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
                                 "password2": "tajneheslo1"})
     client.app_ref = app
     return client
 
 
 def write_routes(tmp_path, text: str) -> None:
-    (tmp_path / "etc" / "routes.json").write_text(text, encoding="utf-8")
+    zssk_users.routes_file(tmp_path / "etc", "jakub").write_text(text, encoding="utf-8")
 
 
 def csrf(client, path="/routes"):
@@ -111,14 +112,14 @@ def test_corrupt_json_toggle_flashes_instead_of_dying(client, tmp_path):
     assert followed.status_code == 200
     assert "poškodený JSON" in followed.get_data(as_text=True)
     # the write never happened: the broken file is still on disk untouched
-    assert (tmp_path / "etc" / "routes.json").read_text() == "{ this is not json"
+    assert zssk_users.routes_file(tmp_path / "etc", "jakub").read_text() == "{ this is not json"
 
 
 # ---- a corrupt ledger, with a perfectly good routes.json -------------------
 
 def test_corrupt_ledger_shows_banner_but_serves_pages(client, tmp_path):
     write_routes(tmp_path, json.dumps({"routes": [VALID_ROUTE]}))
-    (tmp_path / "state" / "ledger.json").write_text("nope", encoding="utf-8")
+    zssk_users.ledger_file(tmp_path / "state", "jakub").write_text("nope", encoding="utf-8")
     routes_page = client.get("/routes")
     assert routes_page.status_code == 200
     assert "Evidencia" in routes_page.get_data(as_text=True)

@@ -26,8 +26,9 @@ class Runner:
         self._lines: list[str] = []
         self._label = ""
         self._returncode: int | None = None
+        self._owner: str | None = None
 
-    def start(self, argv: list[str], label: str) -> None:
+    def start(self, argv: list[str], label: str, owner: str | None = None) -> None:
         with self._lock:
             if self._proc is not None and self._returncode is None:
                 raise RunnerBusy(self._label)
@@ -37,6 +38,7 @@ class Runner:
             )
             self._lines = []
             self._label = label
+            self._owner = owner
             self._returncode = None
             self._thread = threading.Thread(target=self._pump,
                                             args=(self._proc,), daemon=True)
@@ -63,7 +65,13 @@ class Runner:
                 "label": self._label,
                 "lines": fresh,
                 "next_offset": offset + len(fresh),
+                "owner": self._owner,
             }
+
+    @property
+    def owner(self) -> str | None:
+        with self._lock:
+            return self._owner
 
     def stop(self, grace: float = 10.0) -> None:
         with self._lock:
