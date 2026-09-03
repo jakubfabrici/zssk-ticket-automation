@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from functools import wraps
@@ -167,6 +168,23 @@ def save_env(path: Path, values: dict) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write("".join(f"{k}={v}\n" for k, v in values.items()))
     tmp.replace(path)
+
+
+# ---- admin: safe per-user directory removal ---------------------------------
+
+def _safe_rmtree(users_root: Path, uid: str) -> None:
+    """Delete users_root/uid only when it is a real directory that truly sits
+    directly under users_root (no symlink escape, no path games). uid is
+    already registry-validated, but rmtree on personal data warrants belt and
+    braces."""
+    if not zssk_users.valid_uid(uid):
+        return
+    target = Path(users_root) / uid
+    if target.is_symlink() or not target.is_dir():
+        return
+    if target.resolve().parent != Path(users_root).resolve():
+        return
+    shutil.rmtree(target, ignore_errors=True)
 
 
 # ---- auth: current user + decorators ---------------------------------------
@@ -755,6 +773,73 @@ def register_views(app: Flask) -> None:
         if not DEBUG_NAME_RE.fullmatch(name):
             abort(404)
         return send_from_directory(debug_dir(app, read_cfg_safe(app)), name)
+
+    @app.route("/admin/users")
+    @login_required
+    @admin_required
+    def admin_users():
+        store = app.config["USERS"]
+        return render_template("admin_users.html", users=store.users(),
+                               me=current_uid(), admin_count=len(store.admins()))
+
+    @app.route("/admin/users/add", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_add_user():
+        store = app.config["USERS"]
+        uid = request.form.get("uid", "").strip().lower()
+        is_admin = request.form.get("is_admin") == "on"
+        try:
+            token = store.add(uid, is_admin=is_admin)
+            link = url_for("setup_password", uid=uid, token=token, _external=False)
+            flash(f"Používateľ '{uid}' vytvorený. Pošli mu tento jednorazový link "
+                  f"na nastavenie hesla: {link}")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<uid>/delete", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_delete_user(uid):
+        store = app.config["USERS"]
+        if uid == current_uid():
+            flash("Nemôžeš zmazať seba samého.")
+            return redirect(url_for("admin_users"))
+        if store.get(uid) and store.get(uid).get("is_admin") and len(store.admins()) <= 1:
+            flash("Nemôžeš zmazať posledného admina.")
+            return redirect(url_for("admin_users"))
+        if store.exists(uid):
+            store.delete(uid)
+            _safe_rmtree(app.config["ETC_DIR"] / "users", uid)
+            _safe_rmtree(app.config["STATE_DIR"] / "users", uid)
+            flash(f"Používateľ '{uid}' zmazaný.")
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<uid>/reset-password", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_reset_password(uid):
+        store = app.config["USERS"]
+        if not store.exists(uid):
+            abort(404)
+        store.clear_password(uid)
+        flash(f"Heslo pre '{uid}' resetnuté. Nech otvorí /setup-password/{uid}.")
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<uid>/toggle-admin", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_toggle_admin(uid):
+        store = app.config["USERS"]
+        user = store.get(uid)
+        if not user:
+            abort(404)
+        if user.get("is_admin") and len(store.admins()) <= 1:
+            flash("Nemôžeš odobrať práva poslednému adminovi.")
+            return redirect(url_for("admin_users"))
+        store.set_admin(uid, not user.get("is_admin"))
+        return redirect(url_for("admin_users"))
 
 
 if __name__ == "__main__":

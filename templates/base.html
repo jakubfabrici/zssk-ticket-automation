@@ -16,6 +16,7 @@
                                ('run_page', 'Beh'), ('history', 'História')] %}
       {% if endpoint in view_names %}<a href="{{ url_for(endpoint) }}">{{ label }}</a>{% endif %}
     {% endfor %}
+    {% if is_admin %}<a href="{{ url_for('admin_users') }}">Používatelia</a>{% endif %}
     <form method="post" action="{{ url_for('logout') }}" class="inline">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <button type="submit" class="linklike">Odhlásiť</button>
