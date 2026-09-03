@@ -37,15 +37,19 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 # ---- config file helpers ---------------------------------------------------
 
+def routes_path(app: Flask) -> Path:
+    return zssk_users.routes_file(app.config["ETC_DIR"], current_uid())
+
+
 def read_cfg(app: Flask) -> dict:
-    path = app.config["ROUTES_PATH"]
+    path = routes_path(app)
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_cfg(app: Flask, cfg: dict) -> None:
-    path = app.config["ROUTES_PATH"]
+    path = routes_path(app)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                    encoding="utf-8")
@@ -123,20 +127,20 @@ class _DuplicateRoute(Exception):
     """Raised inside mutate_cfg when the locked re-check finds the id taken."""
 
 
-def ledger_path(app: Flask, cfg: dict) -> Path:
-    return Path(cfg.get("ledger") or app.config["STATE_DIR"] / "ledger.json")
+def ledger_path(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.ledger_file(app.config["STATE_DIR"], current_uid())
 
 
-def person_path(app: Flask, cfg: dict) -> Path:
-    return Path(cfg.get("person") or app.config["ETC_DIR"] / "person.txt")
+def person_path(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.person_file(app.config["ETC_DIR"], current_uid())
 
 
-def debug_dir(app: Flask, cfg: dict) -> Path:
-    return Path(cfg.get("debug_dir") or app.config["STATE_DIR"] / "debug")
+def debug_dir(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.debug_dir(app.config["STATE_DIR"], current_uid())
 
 
-def credentials_path(app: Flask, cfg: dict) -> Path:
-    return Path(cfg.get("credentials") or app.config["ETC_DIR"] / "credentials.env")
+def credentials_path(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.credentials_file(app.config["ETC_DIR"], current_uid())
 
 
 def credentials_state(app: Flask, cfg: dict) -> str:
