@@ -4,7 +4,12 @@
 <h1>Prihlásenie</h1>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post">
-  <label>Heslo <input type="password" name="password" autofocus required></label>
+  <label>Prihlasovacie meno <input type="text" name="uid" autofocus required></label>
+  <label>Heslo <input type="password" name="password" required></label>
   <button type="submit">Prihlásiť</button>
 </form>
+{% if needs_setup %}
+<p>Bez nastaveného hesla: {{ needs_setup | join(', ') }}. Prihlásenie dokončíš cez
+jednorazový link, ktorý ti dal admin (obsahuje token).</p>
+{% endif %}
 {% endblock %}

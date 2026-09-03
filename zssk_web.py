@@ -15,14 +15,17 @@ import re
 import secrets
 import threading
 import time
+from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, jsonify, redirect, render_template, request,
-                   send_from_directory, session, url_for, flash)
-from werkzeug.security import check_password_hash, generate_password_hash
+from flask import (Flask, abort, current_app, jsonify, redirect,
+                   render_template, request, send_from_directory, session,
+                   url_for, flash)
 
 import zssk_bulk
+import zssk_users
 from zssk_runner import RunnerBusy
+from zssk_users import UserStore
 
 DEFAULT_BULK_ARGV = ["/usr/bin/xvfb-run", "-a",
                      "/opt/zssk/.venv/bin/python", "/opt/zssk/zssk_bulk.py"]
@@ -150,17 +153,7 @@ def person_ok(app: Flask) -> bool:
     return "example.com" not in person.email
 
 
-# ---- env file (password hash + secret) -------------------------------------
-
-def load_env(path: Path) -> dict:
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            values[key.strip()] = value.strip()
-    return values
-
+# ---- env file (credentials) -------------------------------------------------
 
 def save_env(path: Path, values: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -170,6 +163,43 @@ def save_env(path: Path, values: dict) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write("".join(f"{k}={v}\n" for k, v in values.items()))
     tmp.replace(path)
+
+
+# ---- auth: current user + decorators ---------------------------------------
+
+def current_uid() -> str | None:
+    uid = session.get("uid")
+    return uid if uid and zssk_users.valid_uid(uid) else None
+
+
+def current_user(app: Flask) -> dict | None:
+    uid = current_uid()
+    return app.config["USERS"].get(uid) if uid else None
+
+
+def login_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        app = current_app
+        if not current_uid() or not app.config["USERS"].exists(current_uid()):
+            session.clear()
+            if request.method == "POST" or request.is_json:
+                abort(401)
+            return redirect(url_for("login"))
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        user = current_user(current_app)
+        if not user:
+            return redirect(url_for("login"))
+        if not user.get("is_admin"):
+            abort(403)
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 # ---- app factory -----------------------------------------------------------
@@ -184,36 +214,42 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
     state_dir.mkdir(parents=True, exist_ok=True)
     app.config.update(
         ETC_DIR=etc_dir, STATE_DIR=state_dir,
+        # ROUTES_PATH is dead single-user config, kept only as a harmless
+        # pointer so the still-unconverted views in register_views (Task
+        # 4/5 territory) keep working until they are rewired per-user.
         ROUTES_PATH=etc_dir / "routes.json",
-        ENV_PATH=etc_dir / "webui.env",
         RUNNER=runner,
         BULK_ARGV=list(bulk_argv or DEFAULT_BULK_ARGV),
         FAIL_DELAY=fail_delay,
     )
-    env_path: Path = app.config["ENV_PATH"]
-    if env_path.exists():
-        app.secret_key = load_env(env_path).get("ZSSK_WEBUI_SECRET", "")
-    if not app.secret_key:
-        # Pre-setup there is nothing worth a stable session; rotate freely.
-        app.secret_key = secrets.token_hex(32)
+    store = UserStore(etc_dir)
+    app.config["USERS"] = store
+    # One-time fold of the old single-user files into an admin user.
+    zssk_users.migrate_single_user(etc_dir, state_dir)
+    app.secret_key = store.secret() if store.users() else secrets.token_hex(32)
+    app.permanent_session_lifetime = dt.timedelta(days=14)
 
     @app.context_processor
     def _globals():
         def csrf_token() -> str:
             return session.setdefault("csrf", secrets.token_hex(16))
         return {"csrf_token": csrf_token,
-                "authed": bool(session.get("auth")),
+                "authed": bool(current_uid()),
+                "is_admin": bool((session.get("uid") and
+                                  app.config["USERS"].get(session["uid"]) or {}).get("is_admin")),
                 "view_names": set(app.view_functions)}
 
     @app.before_request
     def gate():
         if request.endpoint in (None, "static"):
             return None
-        if not env_path.exists():
+        store = app.config["USERS"]
+        if not store.users():
             return None if request.endpoint == "setup" else redirect(url_for("setup"))
-        if request.endpoint in ("login", "setup"):
+        if request.endpoint in ("login", "setup", "setup_password"):
             return None
-        if not session.get("auth"):
+        if not current_uid() or not store.exists(current_uid()):
+            session.clear()
             return redirect(url_for("login"))
         if request.method == "POST":
             token = session.get("csrf", "")
@@ -228,7 +264,8 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
 
     @app.route("/setup", methods=["GET", "POST"])
     def setup():
-        if env_path.exists():
+        store = app.config["USERS"]
+        if store.users():
             return redirect(url_for("login"))
         # install.sh drops a one-time token here, so a stranger on the LAN
         # cannot claim a freshly deployed panel before its owner first visits.
@@ -236,9 +273,12 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
         need_token = token_path.exists()
         error = None
         if request.method == "POST":
+            uid = request.form.get("uid", "").strip().lower()
             password = request.form.get("password", "")
             password2 = request.form.get("password2", "")
-            if len(password) < 8:
+            if not zssk_users.valid_uid(uid):
+                error = "Prihlasovacie meno: len a-z, 0-9, _, - (1 az 30 znakov)."
+            elif len(password) < 8:
                 error = "Heslo musí mať aspoň 8 znakov."
             elif password != password2:
                 error = "Heslá sa nezhodujú."
@@ -247,35 +287,65 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
                     token_path.read_text(encoding="utf-8").strip()):
                 error = "Neplatný inštalačný token (install.sh ho vypísal na konci)."
             else:
-                secret = secrets.token_hex(32)
-                save_env(env_path, {
-                    "ZSSK_WEBUI_HASH": generate_password_hash(password),
-                    "ZSSK_WEBUI_SECRET": secret,
-                })
-                app.secret_key = secret
+                store.add(uid, is_admin=True)
+                store.set_password(uid, password)
+                app.secret_key = store.secret()
                 session.clear()
-                session["auth"] = True
+                session["uid"] = uid
+                session.permanent = True
                 token_path.unlink(missing_ok=True)
                 return redirect(url_for("routes_list"))
         return render_template("setup.html", error=error, need_token=need_token)
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
+        store = app.config["USERS"]
         error = None
         if request.method == "POST":
-            stored = load_env(env_path).get("ZSSK_WEBUI_HASH", "")
-            if stored and check_password_hash(stored,
-                                              request.form.get("password", "")):
-                session["auth"] = True
+            uid = request.form.get("uid", "").strip().lower()
+            password = request.form.get("password", "")
+            if store.verify(uid, password):
+                session.clear()
+                session["uid"] = uid
+                session.permanent = True
                 return redirect(url_for("routes_list"))
             time.sleep(app.config["FAIL_DELAY"])
-            error = "Nesprávne heslo."
-        return render_template("login.html", error=error)
+            error = "Nesprávny login alebo heslo."
+        needs_setup = [u for u in store.users() if not store.has_password(u)]
+        return render_template("login.html", error=error, needs_setup=needs_setup)
 
-    @app.route("/logout")
+    @app.route("/logout", methods=["POST"])
     def logout():
         session.clear()
         return redirect(url_for("login"))
+
+    @app.route("/setup-password/<uid>", methods=["GET", "POST"])
+    def setup_password(uid):
+        store = app.config["USERS"]
+        user = store.get(uid)
+        if not user:
+            abort(404)
+        if store.has_password(uid):
+            flash("Heslo už je nastavené, prihlás sa.")
+            return redirect(url_for("login"))
+        token = request.values.get("token", "")
+        if not store.check_invite(uid, token):
+            abort(403)
+        error = None
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+            if len(password) < 8:
+                error = "Heslo musí mať aspoň 8 znakov."
+            elif password != password2:
+                error = "Heslá sa nezhodujú."
+            else:
+                store.set_password(uid, password)   # consumes the invite token
+                session.clear()
+                session["uid"] = uid
+                session.permanent = True
+                return redirect(url_for("routes_list"))
+        return render_template("setup_password.html", uid=uid, error=error, token=token)
 
     register_views(app)
     return app
