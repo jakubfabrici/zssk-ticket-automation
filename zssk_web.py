@@ -295,7 +295,7 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
             password = request.form.get("password", "")
             password2 = request.form.get("password2", "")
             if not zssk_users.valid_uid(uid):
-                error = "Prihlasovacie meno: len a-z, 0-9, _, - (1 az 30 znakov)."
+                error = "Prihlasovacie meno: len a-z, 0-9, _, - (1 až 30 znakov)."
             elif len(password) < 8:
                 error = "Heslo musí mať aspoň 8 znakov."
             elif password != password2:
@@ -613,7 +613,10 @@ def register_views(app: Flask) -> None:
     @login_required
     def run_page():
         routes, ready, cfg_error = _run_context(app)
-        status = app.config["RUNNER"].status()
+        status = dict(app.config["RUNNER"].status())
+        if status.get("owner") and status["owner"] != current_uid():
+            status["label"] = "prebieha nákup iného používateľa"
+            status["foreign"] = True
         return render_template("run.html", routes=routes, ready=ready,
                                status=status, cfg_error=cfg_error)
 
@@ -672,8 +675,8 @@ def register_views(app: Flask) -> None:
         try:
             app.config["RUNNER"].start(argv, label, owner=uid)
             flash(f"Spustené: {label}")
-        except RunnerBusy as busy:
-            flash(f"Už beží: {busy}. Počkaj, alebo beh zastav.")
+        except RunnerBusy:
+            flash("Práve prebieha nákup iného používateľa, skús o chvíľu.")
         return redirect(url_for("run_page"))
 
     @app.route("/run/status")

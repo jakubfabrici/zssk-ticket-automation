@@ -89,3 +89,11 @@ def test_users_parent_dir_is_0700(tmp_path):
     assert (tmp_path / "users").stat().st_mode & 0o777 == 0o700
     user_state(tmp_path, "jakub")
     assert (tmp_path / "users").stat().st_mode & 0o777 == 0o700
+
+
+def test_mkdir_0700_refuses_a_preplanted_symlink(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "users").symlink_to(elsewhere)
+    with pytest.raises(ValueError):
+        user_etc(tmp_path, "jakub")

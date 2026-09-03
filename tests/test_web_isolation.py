@@ -5,6 +5,7 @@ Uses /admin/users and /admin/users/add (Task 6) to create the second user.
 """
 import json
 import re
+import sys
 
 import pytest
 
@@ -64,3 +65,29 @@ def test_peter_cannot_edit_jakubs_route(two_users):
     # peter posting the same id only ever touches HIS own file
     peter.post("/routes/tajna/delete", data={"csrf": _csrf(peter, "/routes")})
     assert "tajna" in admin.get("/routes").get_data(as_text=True)   # untouched
+
+
+def test_running_users_label_is_hidden_from_other_users(two_users):
+    app, admin, peter, tmp_path = two_users
+    admin.post("/settings", data={
+        "name": "Jakub", "surname": "Fabrici", "email": "jakub@example.org",
+        "train_card": "1", "delay": "45", "csrf": _csrf(admin, "/settings")})
+    admin.post("/routes/new", data={
+        "id": "tajna-trasa", "name": "Tajná trasa", "departure": "A",
+        "arrival": "B", "time": "07:12", "weekdays": "", "max": "",
+        "enabled": "on", "csrf": _csrf(admin, "/routes/new")})
+    app.config["BULK_ARGV"] = [sys.executable, "-c",
+                               "import time; time.sleep(30)"]
+    response = admin.post("/run/start", data={
+        "mode": "dry-run", "route": "tajna-trasa",
+        "csrf": _csrf(admin, "/run")})
+    assert response.status_code == 302
+    try:
+        page = peter.get("/run").get_data(as_text=True)
+        assert "jakub" not in page
+        assert "tajna-trasa" not in page
+        assert "prebieha nákup iného používateľa" in page
+    finally:
+        # jakub is the run's owner (and admin), so this stop is legitimate
+        # cleanup, not a test of the ownership guard itself.
+        admin.post("/run/stop", data={"csrf": _csrf(admin, "/run")})

@@ -33,6 +33,8 @@ def _atomic_write(path: Path, text: str, mode: int) -> None:
 
 
 def _mkdir_0700(path: Path) -> Path:
+    if path.is_symlink():
+        raise ValueError(f"cesta je symlink, odmietam: {path}")
     path.mkdir(parents=True, exist_ok=True)
     try:
         path.chmod(0o700)
@@ -240,7 +242,7 @@ def migrate_single_user(etc_dir: Path, state_dir: Path,
     dest_etc = user_etc(etc_dir, admin_uid)
     for name in ("person.txt", "credentials.env", "routes.json"):
         src = etc_dir / name
-        if src.exists() and not src.is_symlink():
+        if src.exists() and not src.is_symlink() and not (dest_etc / name).exists():
             src.replace(dest_etc / name)
     person = dest_etc / "person.txt"
     creds = dest_etc / "credentials.env"
@@ -251,14 +253,14 @@ def migrate_single_user(etc_dir: Path, state_dir: Path,
     dest_state = user_state(state_dir, admin_uid)
     for name in ("ledger.json", "tickets.json"):
         src = state_dir / name
-        if src.exists() and not src.is_symlink():
+        if src.exists() and not src.is_symlink() and not (dest_state / "ledger.json").exists():
             src.replace(dest_state / "ledger.json")
             break
     for sub in ("debug", "downloads", "profile"):
         src = state_dir / sub
         if src.is_dir() and not src.is_symlink():
-            for item in src.iterdir():
-                if not item.is_symlink():
+            for item in list(src.iterdir()):
+                if not item.is_symlink() and not (dest_state / sub / item.name).exists():
                     item.replace(dest_state / sub / item.name)
 
     # Only now the registry + the marker rename. migrate_admin() writes users.json
