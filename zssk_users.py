@@ -91,7 +91,7 @@ class UserStore:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise ValueError(f"users.json je posskodeny: {exc}") from exc
+            raise ValueError(f"users.json je poškodený: {exc}") from exc
         data.setdefault("secret", "")
         data.setdefault("users", {})
         return data
@@ -121,10 +121,10 @@ class UserStore:
 
     def add(self, uid: str, is_admin: bool = False) -> str:
         if not valid_uid(uid):
-            raise ValueError("uid: povolene a-z, 0-9, _, - (1 az 30 znakov)")
+            raise ValueError("uid: povolené a-z, 0-9, _, - (1 až 30 znakov)")
         data = self.load()
         if uid in data["users"]:
-            raise ValueError(f"pouzivatel {uid!r} uz existuje")
+            raise ValueError(f"používateľ {uid!r} už existuje")
         token = secrets.token_urlsafe(24)
         data["users"][uid] = {
             "password_hash": "",
