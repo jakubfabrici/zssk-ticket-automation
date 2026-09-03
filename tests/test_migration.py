@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from zssk_users import (UserStore, migrate_single_user, person_file,
                         routes_file, ledger_file, credentials_file)
 from werkzeug.security import generate_password_hash
@@ -56,3 +58,19 @@ def test_migration_order_data_before_marker(tmp_path):
     migrate_single_user(etc, state)
     assert person_file(etc, "jakub").exists()
     assert (etc / "users.json").exists()
+
+
+def test_crash_before_marker_leaves_data_and_retries(tmp_path, monkeypatch):
+    import zssk_users
+    etc, state = tmp_path / "etc", tmp_path / "state"
+    _old_layout(etc, state)
+    orig = zssk_users.UserStore.migrate_admin
+    monkeypatch.setattr(zssk_users.UserStore, "migrate_admin",
+                        lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("crash")))
+    with pytest.raises(RuntimeError):
+        migrate_single_user(etc, state)
+    assert not (etc / "users.json").exists()        # guard will retry
+    assert person_file(etc, "jakub").exists()        # data already moved, safe
+    monkeypatch.setattr(zssk_users.UserStore, "migrate_admin", orig)
+    assert migrate_single_user(etc, state) is True   # retry finishes
+    assert zssk_users.UserStore(etc).verify("jakub", "tajneheslo1")

@@ -186,6 +186,27 @@ class UserStore:
         data["users"][uid]["password_hash"] = password_hash
         self._save(data)
 
+    def migrate_admin(self, uid: str, password_hash: str,
+                      secret: str | None = None) -> None:
+        """Create an admin with a precomputed hash AND set the secret in a
+        SINGLE atomic write. That single users.json write is the migration's
+        real completion marker, so a crash cannot leave a half-written file
+        the existence guard would wrongly treat as done."""
+        if not valid_uid(uid):
+            raise ValueError(f"neplatný uid: {uid!r}")
+        data = self.load()
+        if secret:
+            data["secret"] = secret
+        elif not data.get("secret"):
+            data["secret"] = secrets.token_hex(32)
+        data["users"][uid] = {
+            "password_hash": password_hash,
+            "is_admin": True,
+            "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+            "invite_token": "",
+        }
+        self._save(data)
+
 
 def _load_env(path: Path) -> dict:
     values: dict[str, str] = {}
@@ -230,24 +251,19 @@ def migrate_single_user(etc_dir: Path, state_dir: Path,
     dest_state = user_state(state_dir, admin_uid)
     for name in ("ledger.json", "tickets.json"):
         src = state_dir / name
-        if src.exists():
+        if src.exists() and not src.is_symlink():
             src.replace(dest_state / "ledger.json")
             break
     for sub in ("debug", "downloads", "profile"):
         src = state_dir / sub
-        if src.is_dir():
+        if src.is_dir() and not src.is_symlink():
             for item in src.iterdir():
                 if not item.is_symlink():
                     item.replace(dest_state / sub / item.name)
 
-    # Only now the registry + the marker rename. add() writes users.json, which
-    # is exactly the "done" flag the guard at the top checks.
-    store.add(admin_uid, is_admin=True)
-    if env.get("ZSSK_WEBUI_HASH"):
-        store.set_hash(admin_uid, env["ZSSK_WEBUI_HASH"])
-    if env.get("ZSSK_WEBUI_SECRET"):
-        data = store.load()
-        data["secret"] = env["ZSSK_WEBUI_SECRET"]
-        store._save(data)
+    # Only now the registry + the marker rename. migrate_admin() writes users.json
+    # exactly once, which is the "done" flag the guard at the top checks.
+    store.migrate_admin(admin_uid, env.get("ZSSK_WEBUI_HASH", ""),
+                        env.get("ZSSK_WEBUI_SECRET"))
     old_env.replace(etc_dir / "webui.env.migrated")
     return True
