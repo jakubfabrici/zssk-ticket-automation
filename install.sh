@@ -23,6 +23,8 @@ STATE_DIR=/var/lib/zssk
 say "migrating local state out of the git working tree"
 mkdir -p "$ETC_DIR" "$STATE_DIR/debug" "$STATE_DIR/downloads" "$STATE_DIR/profile"
 chmod 0700 "$STATE_DIR/debug" "$STATE_DIR/downloads" "$STATE_DIR/profile"
+mkdir -p "$ETC_DIR/users" "$STATE_DIR/users"
+chmod 0700 "$ETC_DIR/users" "$STATE_DIR/users"
 # Order matters: these run BEFORE the git reset below, which would otherwise
 # overwrite a filled-in person.txt (tracked upstream) and before git clean,
 # which would delete the ledger (untracked in the working tree).
