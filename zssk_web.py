@@ -782,8 +782,19 @@ def register_views(app: Flask) -> None:
     @admin_required
     def admin_users():
         store = app.config["USERS"]
+        # A shareable, absolute link WITH the one-time token for every user who
+        # has not set a password yet. This is the single source of the invite
+        # link; the flashes below just point here so the two never diverge.
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        base = f"{proto}://{request.host}"
+        invite_links = {
+            uid: base + url_for("setup_password", uid=uid, token=u["invite_token"])
+            for uid, u in store.users().items()
+            if not u["password_hash"] and u.get("invite_token")
+        }
         return render_template("admin_users.html", users=store.users(),
-                               me=current_uid(), admin_count=len(store.admins()))
+                               me=current_uid(), admin_count=len(store.admins()),
+                               invite_links=invite_links)
 
     @app.route("/admin/users/add", methods=["POST"])
     @login_required
@@ -793,10 +804,9 @@ def register_views(app: Flask) -> None:
         uid = request.form.get("uid", "").strip().lower()
         is_admin = request.form.get("is_admin") == "on"
         try:
-            token = store.add(uid, is_admin=is_admin)
-            link = url_for("setup_password", uid=uid, token=token, _external=False)
-            flash(f"Používateľ '{uid}' vytvorený. Pošli mu tento jednorazový link "
-                  f"na nastavenie hesla: {link}")
+            store.add(uid, is_admin=is_admin)
+            flash(f"Používateľ '{uid}' vytvorený. Jednorazový link na nastavenie "
+                  f"hesla nájdeš nižšie v tabuľke (stĺpec Heslo) a pošli mu ho.")
         except ValueError as exc:
             flash(str(exc))
         return redirect(url_for("admin_users"))
@@ -827,7 +837,8 @@ def register_views(app: Flask) -> None:
         if not store.exists(uid):
             abort(404)
         store.clear_password(uid)
-        flash(f"Heslo pre '{uid}' resetnuté. Nech otvorí /setup-password/{uid}.")
+        flash(f"Heslo pre '{uid}' resetnuté. Nový jednorazový link je nižšie "
+              f"v tabuľke (stĺpec Heslo).")
         return redirect(url_for("admin_users"))
 
     @app.route("/admin/users/<uid>/toggle-admin", methods=["POST"])

@@ -32,6 +32,23 @@ def test_add_user_creates_invite(admin):
     assert app.config["USERS"].exists("peter") and not app.config["USERS"].has_password("peter")
 
 
+def test_admin_invite_link_carries_working_token(admin):
+    # Regression: the durable invite link on the admin page must carry the
+    # one-time token, and following it must reach the form (200), not 403.
+    # Before the fix the table link was tokenless -> setup_password aborted 403.
+    from urllib.parse import urlsplit
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    page = c.get("/admin/users").get_data(as_text=True)
+    m = re.search(r'href="([^"]*setup-password/peter[^"]*)"', page)
+    assert m, "no setup-password link for peter on the admin page"
+    link = m.group(1).replace("&amp;", "&")
+    assert "token=" in link, "invite link on admin page is missing its one-time token"
+    sp = urlsplit(link)
+    path = sp.path + ("?" + sp.query if sp.query else "")
+    assert c.get(path).status_code == 200
+
+
 def test_add_rejects_bad_and_duplicate(admin):
     app, c, tmp_path = admin
     assert "a-z" in c.post("/admin/users/add", data={"uid": "Zle", "csrf": _csrf(c)},
