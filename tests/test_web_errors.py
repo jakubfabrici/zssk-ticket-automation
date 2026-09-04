@@ -28,7 +28,7 @@ def client(tmp_path):
     app.config["TESTING"] = True
     client = app.test_client()
     client.get("/setup")
-    client.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
+    client.post("/setup", data={"username": "jakub", "password": "tajneheslo1",
                                 "password2": "tajneheslo1"})
     client.app_ref = app
     return client

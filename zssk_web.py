@@ -291,7 +291,7 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
         need_token = token_path.exists()
         error = None
         if request.method == "POST":
-            uid = request.form.get("uid", "").strip().lower()
+            uid = request.form.get("username", "").strip().lower()
             password = request.form.get("password", "")
             password2 = request.form.get("password2", "")
             if not zssk_users.valid_uid(uid):
@@ -320,7 +320,7 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
         store = app.config["USERS"]
         error = None
         if request.method == "POST":
-            uid = request.form.get("uid", "").strip().lower()
+            uid = request.form.get("username", "").strip().lower()
             password = request.form.get("password", "")
             if store.verify(uid, password):
                 session.clear()

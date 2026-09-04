@@ -5,7 +5,7 @@
 <form method="post" action="{{ url_for('admin_add_user') }}">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
   <label>Nový používateľ (a-z, 0-9, _, -)
-    <input type="text" name="uid" required></label>
+    <input type="text" name="uid" autocomplete="off" required></label>
   <label><input type="checkbox" name="is_admin"> Admin</label>
   <button type="submit">Pridať</button>
 </form>

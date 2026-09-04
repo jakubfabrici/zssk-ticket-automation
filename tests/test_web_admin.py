@@ -14,7 +14,7 @@ def admin(tmp_path):
     app.config["TESTING"] = True
     c = app.test_client()
     c.get("/setup")
-    c.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
+    c.post("/setup", data={"username": "jakub", "password": "tajneheslo1",
                            "password2": "tajneheslo1"})
     return app, c, tmp_path
 
@@ -47,6 +47,17 @@ def test_admin_invite_link_carries_working_token(admin):
     sp = urlsplit(link)
     path = sp.path + ("?" + sp.query if sp.query else "")
     assert c.get(path).status_code == 200
+
+
+def test_setup_password_form_has_pm_fields(admin):
+    # the invited user's set-password page needs a username field (so the PM
+    # associates the new password with the uid) plus new-password on both boxes.
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    tok = app.config["USERS"].invite_token("peter")
+    page = c.get(f"/setup-password/peter?token={tok}").get_data(as_text=True)
+    assert 'autocomplete="username"' in page and 'value="peter"' in page
+    assert page.count('autocomplete="new-password"') >= 2
 
 
 def test_add_rejects_bad_and_duplicate(admin):

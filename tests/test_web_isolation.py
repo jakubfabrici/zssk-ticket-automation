@@ -22,7 +22,7 @@ def two_users(tmp_path):
     app.config["TESTING"] = True
     admin = app.test_client()
     admin.get("/setup")
-    admin.post("/setup", data={"uid": "jakub", "password": "tajneheslo1",
+    admin.post("/setup", data={"username": "jakub", "password": "tajneheslo1",
                                "password2": "tajneheslo1"})
     users_page = admin.get("/admin/users")
     token = CSRF_RE.search(users_page.get_data(as_text=True)).group(1)

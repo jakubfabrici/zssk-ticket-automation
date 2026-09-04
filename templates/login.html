@@ -4,8 +4,10 @@
 <h1>Prihlásenie</h1>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post">
-  <label>Prihlasovacie meno <input type="text" name="uid" autofocus required></label>
-  <label>Heslo <input type="password" name="password" required></label>
+  <label>Prihlasovacie meno
+    <input type="text" name="username" id="username" autocomplete="username" autofocus required></label>
+  <label>Heslo
+    <input type="password" name="password" id="current-password" autocomplete="current-password" required></label>
   <button type="submit">Prihlásiť</button>
 </form>
 {% if needs_setup %}

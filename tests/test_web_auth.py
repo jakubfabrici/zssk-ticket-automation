@@ -21,7 +21,7 @@ def client(app):
 
 def first_admin(client, uid="jakub", password="tajneheslo1"):
     client.get("/setup")
-    return client.post("/setup", data={"uid": uid, "password": password,
+    return client.post("/setup", data={"username": uid, "password": password,
                                        "password2": password})
 
 
@@ -41,9 +41,9 @@ def test_setup_creates_first_admin_and_logs_in(client, tmp_path):
 
 def test_setup_rejects_bad_uid_and_short_password(client):
     client.get("/setup")
-    assert "uid" in client.post("/setup", data={"uid": "Bad Id", "password": "tajneheslo1",
-                                                "password2": "tajneheslo1"}).get_data(as_text=True).lower()
-    assert "8" in client.post("/setup", data={"uid": "jakub", "password": "krat",
+    assert 'class="error"' in client.post("/setup", data={"username": "Bad Id", "password": "tajneheslo1",
+                                                "password2": "tajneheslo1"}).get_data(as_text=True)
+    assert "8" in client.post("/setup", data={"username": "jakub", "password": "krat",
                                               "password2": "krat"}).get_data(as_text=True)
 
 
@@ -55,17 +55,17 @@ def test_setup_refuses_once_a_user_exists(client):
 def test_login_wrong_password_and_unknown_user(client):
     first_admin(client)
     client.post("/logout", data={"csrf": _csrf(client, "/login")})
-    r = client.post("/login", data={"uid": "jakub", "password": "zle"})
+    r = client.post("/login", data={"username": "jakub", "password": "zle"})
     assert "Nesprávny" in r.get_data(as_text=True)
     assert client.get("/routes").status_code == 302
-    assert "Nesprávny" in client.post("/login", data={"uid": "neexistuje",
+    assert "Nesprávny" in client.post("/login", data={"username": "neexistuje",
                                                       "password": "x"}).get_data(as_text=True)
 
 
 def test_login_success(client):
     first_admin(client)
     client.post("/logout", data={"csrf": _csrf(client, "/login")})
-    client.post("/login", data={"uid": "jakub", "password": "tajneheslo1"})
+    client.post("/login", data={"username": "jakub", "password": "tajneheslo1"})
     assert client.get("/routes").status_code == 200
 
 
@@ -78,6 +78,22 @@ def test_session_gets_fresh_id_on_login(client):
 def _csrf(client, path):
     m = CSRF_RE.search(client.get(path).get_data(as_text=True))
     return m.group(1) if m else ""
+
+
+def test_login_form_has_password_manager_fields(client):
+    # password managers key off type + autocomplete (and a username field);
+    # the login form must present username + current-password.
+    first_admin(client)
+    client.post("/logout", data={"csrf": _csrf(client, "/login")})
+    page = client.get("/login").get_data(as_text=True)
+    assert 'name="username"' in page and 'autocomplete="username"' in page
+    assert 'type="password"' in page and 'autocomplete="current-password"' in page
+
+
+def test_setup_form_marks_username_and_new_password(client):
+    page = client.get("/setup").get_data(as_text=True)
+    assert 'name="username"' in page and 'autocomplete="username"' in page
+    assert 'autocomplete="new-password"' in page
 
 
 def test_authed_post_without_csrf_is_400(client):
