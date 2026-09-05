@@ -29,7 +29,7 @@ def csrf(client, path="/routes"):
     return match.group(1)
 
 
-VALID = {"id": "tatran-ne", "name": "Tatran do Košíc",
+VALID = {"name": "Tatran ne",
          "departure": "Spišská Nová Ves", "arrival": "Košice",
          "time": "16:58", "train": "EX 619", "weekdays": "ne",
          "max": "5", "enabled": "on"}
@@ -49,7 +49,7 @@ def test_create_shows_card_with_plan(client, tmp_path):
     response = create_route(client)
     assert response.status_code == 302
     page = client.get("/routes").get_data(as_text=True)
-    assert "Tatran do Košíc" in page and "16:58" in page and "EX 619" in page
+    assert "Tatran ne" in page and "16:58" in page and "EX 619" in page
     saved = json.loads(zssk_users.routes_file(tmp_path / "etc", "jakub").read_text())
     assert saved["routes"][0]["id"] == "tatran-ne"
     assert saved["routes"][0]["max"] == 5
@@ -57,7 +57,6 @@ def test_create_shows_card_with_plan(client, tmp_path):
 
 @pytest.mark.parametrize("field, value, fragment", [
     ("time", "25:99", "HH:MM"),
-    ("id", "Zlé ID!", "malé písmená"),
     ("weekdays", "pondelok", "pondelok"),
     ("departure", "", "povinn"),
     ("max", "abc", "číslo"),
@@ -69,10 +68,12 @@ def test_invalid_form_rerenders_with_error(client, field, value, fragment):
     assert fragment in response.get_data(as_text=True)
 
 
-def test_duplicate_id_rejected(client):
+def test_duplicate_name_gets_unique_id(client, tmp_path):
     create_route(client)
-    response = create_route(client)
-    assert "existuje" in response.get_data(as_text=True)
+    response = create_route(client)          # same name -> id made unique
+    assert response.status_code == 302
+    saved = json.loads(zssk_users.routes_file(tmp_path / "etc", "jakub").read_text())
+    assert [r["id"] for r in saved["routes"]] == ["tatran-ne", "tatran-ne-2"]
 
 
 def test_route_new_duplicate_check_holds_inside_the_lock(client, tmp_path, monkeypatch):

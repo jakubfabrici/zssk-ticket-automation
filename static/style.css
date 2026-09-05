@@ -188,3 +188,12 @@ table.calendar { table-layout: fixed; margin-top: .5rem; }
   .section-head { flex-direction: column; align-items: stretch; }
   header nav { width: 100%; margin-left: 0; }
 }
+
+/* ---- route form: day pickers + advanced ---- */
+fieldset.days { border: 1px solid var(--border); border-radius: 8px; padding: .5rem .8rem; margin: .6rem 0; }
+fieldset.days legend { color: var(--muted); font-size: .9rem; padding: 0 .3rem; }
+.day { display: inline-flex; align-items: center; gap: .35rem; margin: .2rem .9rem .2rem 0; color: var(--text); }
+.day input, .check input { min-width: 0; width: auto; margin: 0; }
+label.check { display: flex; align-items: center; gap: .4rem; color: var(--text); }
+details.advanced { margin: .6rem 0; }
+details.advanced summary { color: var(--muted); cursor: pointer; }

@@ -73,7 +73,7 @@ def test_routes_page_hosts_run_panel_and_run_redirects(env):
     fill_person(client, tmp_path)
     page = client.get("/routes").get_data(as_text=True)
     # the run controls are merged onto the main Trasy page
-    assert 'action="/run/start"' in page and "Skúšobný beh" in page
+    assert 'action="/run/start"' in page and "Test" in page
     assert 'id="beh"' in page
     # /run stays as a bookmark that redirects to the panel
     r = client.get("/run")

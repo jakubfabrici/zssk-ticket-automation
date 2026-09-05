@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import re
+import unicodedata
 import secrets
 import shutil
 import threading
@@ -385,22 +386,47 @@ def route_overview(app: Flask, route, today=None):
     return planned, bought
 
 
+def _slugify(text: str) -> str:
+    ascii_ = (unicodedata.normalize("NFKD", text)
+              .encode("ascii", "ignore").decode("ascii").lower())
+    return re.sub(r"[^a-z0-9]+", "-", ascii_).strip("-")[:32].strip("-")
+
+
+def _unique_slug(base: str, existing: set[str]) -> str:
+    base = base or "trasa"
+    cand, i = base, 2
+    while cand in existing:
+        suffix = f"-{i}"
+        cand = (base[:32 - len(suffix)].strip("-") or "trasa") + suffix
+        i += 1
+    return cand
+
+
 def parse_route_form(form, existing_ids: set[str],
                      editing_id: str | None = None) -> tuple[dict | None, list[str]]:
     errors: list[str] = []
-    route_id = (editing_id or form.get("id", "")).strip()
     name = form.get("name", "").strip()
     departure = form.get("departure", "").strip()
     arrival = form.get("arrival", "").strip()
     time_value = form.get("time", "").strip()
     train = form.get("train", "").strip()
-    weekdays = form.get("weekdays", "").strip()
+    # Weekdays arrive as day checkboxes (several values); a non-form caller can
+    # still pass a comma string.
+    if hasattr(form, "getlist"):
+        weekdays = ",".join(d.strip() for d in form.getlist("weekdays") if d.strip())
+    else:
+        weekdays = form.get("weekdays", "").strip()
     max_raw = form.get("max", "").strip()
 
-    if editing_id is None and not ID_RE.fullmatch(route_id):
-        errors.append("ID: len malé písmená, číslice a pomlčky (max 32 znakov).")
-    if editing_id is None and route_id in existing_ids:
-        errors.append(f"Trasa s ID '{route_id}' už existuje.")
+    # The id is no longer typed by the user; for a new route it is derived from
+    # the name (slug, made unique). Editing keeps the existing id.
+    if editing_id is not None:
+        route_id = editing_id
+    elif not name:
+        errors.append("Názov trasy je povinný.")
+        route_id = ""
+    else:
+        route_id = _unique_slug(_slugify(name), existing_ids)
     if not departure or not arrival:
         errors.append("Stanice sú povinné.")
     if not TIME_RE.fullmatch(time_value):
@@ -674,7 +700,7 @@ def register_views(app: Flask) -> None:
         if route_id:
             argv += ["--route", route_id]
         argv.append("--confirm" if mode == "confirm" else "--dry-run")
-        label = f"{uid}: {'NÁKUP' if mode == 'confirm' else 'skúšobný beh'}"
+        label = f"{uid}: {'NÁKUP' if mode == 'confirm' else 'test'}"
         label += f" ({route_id or 'všetky zapnuté trasy'})"
         try:
             app.config["RUNNER"].start(argv, label, owner=uid)

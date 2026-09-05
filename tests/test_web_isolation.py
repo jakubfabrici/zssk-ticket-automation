@@ -59,7 +59,7 @@ def test_routes_are_isolated_between_users(two_users):
 def test_peter_cannot_edit_jakubs_route(two_users):
     app, admin, peter, tmp_path = two_users
     admin.post("/routes/new", data={
-        "id": "tajna", "name": "T", "departure": "A", "arrival": "B",
+        "id": "tajna", "name": "Tajná", "departure": "A", "arrival": "B",
         "time": "07:12", "weekdays": "", "max": "", "enabled": "on",
         "csrf": _csrf(admin, "/routes/new")})
     # peter posting the same id only ever touches HIS own file

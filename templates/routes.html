@@ -8,7 +8,7 @@
   <h2>Spustiť beh</h2>
   {% if not ready %}
   <p class="warn">Najprv vyplň osobné údaje v <a href="{{ url_for('settings') }}">Nastaveniach</a>.
-     Bez nich sa nedá spustiť ani skúšobný beh.</p>
+     Bez nich sa nedá spustiť ani test.</p>
   {% endif %}
   <div class="run-controls">
     <form method="post" action="{{ url_for('run_start') }}" class="inline">
@@ -21,7 +21,7 @@
           <option value="{{ route.id }}">{{ route.name }} ({{ route.trip.time }})</option>
           {% endfor %}
         </select></label>
-      <button type="submit" class="primary" {{ '' if ready else 'disabled' }}>Skúšobný beh</button>
+      <button type="submit" class="primary" {{ '' if ready else 'disabled' }}>Test</button>
     </form>
     <form method="post" action="{{ url_for('run_confirm') }}" class="inline"
           onsubmit="this.route.value = document.querySelector('select[name=route]').value">
