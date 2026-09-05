@@ -57,13 +57,13 @@ def test_bad_weekday_shows_banner_on_routes(client, tmp_path):
 def test_bad_weekday_shows_banner_on_run(client, tmp_path):
     write_routes(tmp_path, json.dumps(
         {"routes": [dict(VALID_ROUTE, weekdays="pondelok")]}))
-    response = client.get("/run")
+    response = client.get("/run", follow_redirects=True)
     assert response.status_code == 200
     assert "nedá načítať" in response.get_data(as_text=True)
 
 
 def test_bad_weekday_run_start_redirects_with_flash(client, tmp_path):
-    token = csrf(client, "/run")
+    token = csrf(client, "/routes")
     write_routes(tmp_path, json.dumps(
         {"routes": [dict(VALID_ROUTE, weekdays="pondelok")]}))
     response = client.post("/run/start", data={"mode": "dry-run", "route": "",
@@ -75,7 +75,7 @@ def test_bad_weekday_run_start_redirects_with_flash(client, tmp_path):
 
 
 def test_bad_weekday_run_confirm_redirects_with_flash(client, tmp_path):
-    token = csrf(client, "/run")
+    token = csrf(client, "/routes")
     write_routes(tmp_path, json.dumps(
         {"routes": [dict(VALID_ROUTE, weekdays="pondelok")]}))
     response = client.post("/run/confirm", data={"route": "tatran-ne",
@@ -87,7 +87,7 @@ def test_bad_weekday_run_confirm_redirects_with_flash(client, tmp_path):
 
 # ---- a routes.json that is not JSON at all --------------------------------
 
-@pytest.mark.parametrize("path", ["/routes", "/history", "/settings", "/run"])
+@pytest.mark.parametrize("path", ["/routes", "/history", "/settings"])
 def test_corrupt_json_read_views_still_answer(client, tmp_path, path):
     write_routes(tmp_path, "{ this is not json")
     response = client.get(path)
@@ -103,7 +103,7 @@ def test_corrupt_json_new_and_edit_forms_redirect(client, tmp_path):
 
 
 def test_corrupt_json_toggle_flashes_instead_of_dying(client, tmp_path):
-    token = csrf(client, "/run")             # a token minted while it was fine
+    token = csrf(client, "/routes")             # a token minted while it was fine
     write_routes(tmp_path, "{ this is not json")
     response = client.post("/routes/tatran-ne/toggle", data={"csrf": token})
     assert response.status_code == 302

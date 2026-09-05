@@ -3,20 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>{% block title %}ZSSK lístky{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <header>
-  <strong>ZSSK lístky</strong>
+  <span class="brand">ZSSK lístky</span>
   {% if authed %}
   <nav>
-    {# The guard lets this base render before Tasks 8 and 9 add their views. #}
-    {% for endpoint, label in [('routes_list', 'Trasy'), ('calendar_view', 'Kalendár'), ('settings', 'Nastavenia'),
-                               ('run_page', 'Beh'), ('history', 'História')] %}
-      {% if endpoint in view_names %}<a href="{{ url_for(endpoint) }}">{{ label }}</a>{% endif %}
+    {# The guard lets this base render before optional views exist. #}
+    {% for endpoint, label in [('routes_list', 'Trasy'), ('calendar_view', 'Kalendár'),
+                               ('history', 'História'), ('settings', 'Nastavenia')] %}
+      {% if endpoint in view_names %}
+        <a href="{{ url_for(endpoint) }}"{% if endpoint == request.endpoint %} class="active"{% endif %}>{{ label }}</a>
+      {% endif %}
     {% endfor %}
-    {% if is_admin %}<a href="{{ url_for('admin_users') }}">Používatelia</a>{% endif %}
+    {% if is_admin %}<a href="{{ url_for('admin_users') }}"{% if request.endpoint == 'admin_users' %} class="active"{% endif %}>Používatelia</a>{% endif %}
     <form method="post" action="{{ url_for('logout') }}" class="inline">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <button type="submit" class="linklike">Odhlásiť</button>

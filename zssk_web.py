@@ -442,7 +442,15 @@ def register_views(app: Flask) -> None:
                               "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
         except ConfigError as exc:
             cards, cfg_error = [], str(exc)
-        return render_template("routes.html", cards=cards, cfg_error=cfg_error)
+        # The run panel is merged into this page, so pass its context too.
+        run_routes = [r for r in routes if r.enabled]
+        ready = person_ok(app)
+        status = dict(app.config["RUNNER"].status())
+        if status.get("owner") and status["owner"] != current_uid():
+            status["label"] = "prebieha nákup iného používateľa"
+            status["foreign"] = True
+        return render_template("routes.html", cards=cards, cfg_error=cfg_error,
+                               routes=run_routes, ready=ready, status=status)
 
     @app.route("/routes/new", methods=["GET", "POST"])
     @login_required
@@ -612,13 +620,9 @@ def register_views(app: Flask) -> None:
     @app.route("/run")
     @login_required
     def run_page():
-        routes, ready, cfg_error = _run_context(app)
-        status = dict(app.config["RUNNER"].status())
-        if status.get("owner") and status["owner"] != current_uid():
-            status["label"] = "prebieha nákup iného používateľa"
-            status["foreign"] = True
-        return render_template("run.html", routes=routes, ready=ready,
-                               status=status, cfg_error=cfg_error)
+        # The run panel now lives on the main Trasy page; keep /run as a
+        # bookmark that lands on that panel.
+        return redirect(url_for("routes_list") + "#beh")
 
     def _selected(app):
         route_id = request.form.get("route", "")
@@ -634,14 +638,14 @@ def register_views(app: Flask) -> None:
         route_id, routes, ready, cfg_error = _selected(app)
         if cfg_error:
             flash(cfg_error)
-            return redirect(url_for("run_page"))
+            return redirect(url_for("routes_list"))
         if not ready:
             abort(400)
         try:
             preview = [(route, route_overview(app, route)[0]) for route in routes]
         except ConfigError as exc:
             flash(str(exc))
-            return redirect(url_for("run_page"))
+            return redirect(url_for("routes_list"))
         return render_template("run_confirm.html", preview=preview,
                                route_id=route_id)
 
@@ -654,7 +658,7 @@ def register_views(app: Flask) -> None:
         route_id, routes, ready, cfg_error = _selected(app)
         if cfg_error:
             flash(cfg_error)
-            return redirect(url_for("run_page"))
+            return redirect(url_for("routes_list"))
         if not ready or not routes:
             abort(400)
         etc, state = app.config["ETC_DIR"], app.config["STATE_DIR"]
@@ -677,7 +681,7 @@ def register_views(app: Flask) -> None:
             flash(f"Spustené: {label}")
         except RunnerBusy:
             flash("Práve prebieha nákup iného používateľa, skús o chvíľu.")
-        return redirect(url_for("run_page"))
+        return redirect(url_for("routes_list"))
 
     @app.route("/run/status")
     @login_required
@@ -698,10 +702,10 @@ def register_views(app: Flask) -> None:
         user = current_user(app)
         if owner and owner != current_uid() and not (user or {}).get("is_admin"):
             flash("Beží nákup iného používateľa, nemôžeš ho zastaviť.")
-            return redirect(url_for("run_page"))
+            return redirect(url_for("routes_list"))
         app.config["RUNNER"].stop()
         flash("Beh zastavený.")
-        return redirect(url_for("run_page"))
+        return redirect(url_for("routes_list"))
 
     @app.route("/kalendar")
     @login_required

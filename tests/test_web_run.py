@@ -41,7 +41,7 @@ def env(tmp_path):
     return client, tmp_path, argv_file
 
 
-def csrf(client, path="/run"):
+def csrf(client, path="/routes"):
     return CSRF_RE.search(client.get(path).get_data(as_text=True)).group(1)
 
 
@@ -64,8 +64,20 @@ def wait_for_argv(argv_file, timeout=10):
 
 def test_buttons_disabled_without_person(env):
     client, _, _ = env
-    page = client.get("/run").get_data(as_text=True)
+    page = client.get("/routes").get_data(as_text=True)
     assert "Najprv vyplň osobné údaje" in page
+
+
+def test_routes_page_hosts_run_panel_and_run_redirects(env):
+    client, tmp_path, _ = env
+    fill_person(client, tmp_path)
+    page = client.get("/routes").get_data(as_text=True)
+    # the run controls are merged onto the main Trasy page
+    assert 'action="/run/start"' in page and "Skúšobný beh" in page
+    assert 'id="beh"' in page
+    # /run stays as a bookmark that redirects to the panel
+    r = client.get("/run")
+    assert r.status_code == 302 and "/routes" in r.headers["Location"]
 
 
 def test_start_refused_without_person(env):

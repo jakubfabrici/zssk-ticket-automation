@@ -80,14 +80,14 @@ def test_running_users_label_is_hidden_from_other_users(two_users):
                                "import time; time.sleep(30)"]
     response = admin.post("/run/start", data={
         "mode": "dry-run", "route": "tajna-trasa",
-        "csrf": _csrf(admin, "/run")})
+        "csrf": _csrf(admin, "/routes")})
     assert response.status_code == 302
     try:
-        page = peter.get("/run").get_data(as_text=True)
+        page = peter.get("/routes").get_data(as_text=True)
         assert "jakub" not in page
         assert "tajna-trasa" not in page
         assert "prebieha nákup iného používateľa" in page
     finally:
         # jakub is the run's owner (and admin), so this stop is legitimate
         # cleanup, not a test of the ownership guard itself.
-        admin.post("/run/stop", data={"csrf": _csrf(admin, "/run")})
+        admin.post("/run/stop", data={"csrf": _csrf(admin, "/routes")})
