@@ -86,7 +86,7 @@ its line from `tickets.json` if you want the tool to buy that date again.
 From a checkout of this repo **on the Proxmox host**, as root:
 
 ```bash
-bash deploy/zssk/bootstrap.sh
+bash bootstrap.sh
 ```
 
 Tunables (all optional, defaults in the script): `VMID=121`,
@@ -194,6 +194,6 @@ are covered without a browser in `tests/test_zssk_bulk.py`.
 ## Security
 
 `person.txt` holds personal data: it lives only inside the container, at mode
-`0600`, and `deploy/zssk/person.txt` is git-ignored so a local copy cannot be
+`0600`, and `person.txt` is git-ignored so a local copy cannot be
 committed by accident. The container needs nothing but outbound HTTPS — do not
 expose it, and do not give it the MCP bearer token.

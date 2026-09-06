@@ -1,6 +1,6 @@
 """Tests for the ZSSK bulk ticket buyer.
 
-The tool lives in deploy/zssk/ (it is installed into its own container, not
+The tool lives at the repository root (it is installed into its own container, not
 into the MCP package), so it is loaded by path. Everything here runs without
 selenium and without a browser: planning, the ledger, config resolution and
 the ordered-fallback element lookup against a stub driver.
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "deploy" / "zssk" / "zssk_bulk.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "zssk_bulk.py"
 
 
 def _load():

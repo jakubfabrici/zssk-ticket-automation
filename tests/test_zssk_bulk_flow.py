@@ -1,7 +1,7 @@
 """End-to-end test of the checkout flow against a local mock of the e-shop.
 
 The real site sits behind bot defense and would be a rude thing to exercise
-from a test suite, so deploy/zssk/mock/ reproduces the shape the automation
+from a test suite, so mock/ reproduces the shape the automation
 depends on: typeahead station fields, a readonly datepicker, results whose
 "Kúpiť lístok" button only appears on the expanded connection, the passenger
 and discount dropdowns, the two label-driven checkboxes and the payment step.
@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-MOCK_DIR = ROOT / "deploy" / "zssk" / "mock"
+MOCK_DIR = ROOT / "mock"
 
 FIREFOX = (os.environ.get("ZSSK_TEST_FIREFOX") or shutil.which("firefox")
            or shutil.which("firefox-esr"))

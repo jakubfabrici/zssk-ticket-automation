@@ -1,6 +1,6 @@
 [Unit]
 Description=Top up ZSSK zero-fare tickets for the recurring commute
-Documentation=https://github.com/jakubfabrici/claudecode/tree/main/deploy/zssk
+Documentation=https://github.com/jakubfabrici/zssk-ticket-automation
 After=network-online.target
 Wants=network-online.target
 

@@ -4,7 +4,7 @@
 # automation inside it. Safe to re-run: an existing container is reused.
 #
 #   Usage (as root on pve, from a checkout of this repo):
-#     bash deploy/zssk/bootstrap.sh
+#     bash bootstrap.sh
 #
 #   Or without a checkout on the host:
 #     VMID=121 IP_CIDR=192.168.1.251/24 bash <(curl -fsSL <raw-url-of-this-file>)
