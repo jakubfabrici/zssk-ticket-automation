@@ -5,31 +5,39 @@
 {% for error in errors %}<p class="error">{{ error }}</p>{% endfor %}
 <form method="post">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-  <h2>Osobné údaje cestujúceho</h2>
+  <h2>Tvoje údaje</h2>
+  <p class="muted">Tieto údaje idú na lístok. Vyplň ich raz.</p>
   <label>Meno <input type="text" name="name"
       value="{{ values.get('name', '') }}" required></label>
   <label>Priezvisko <input type="text" name="surname"
       value="{{ values.get('surname', '') }}" required></label>
-  <label>E-mail (sem chodia lístky) <input type="text" name="email"
-      value="{{ values.get('email', '') }}" required></label>
-  <label>Číslo registrácie ZSSK <input type="text" name="train_card"
-      value="{{ values.get('train_card', '') }}" required></label>
-  <h2>ZSSK konto (lístky prídu aj do aplikácie)</h2>
+  <label>E-mail <span class="muted">(sem prídu lístky)</span>
+    <input type="email" name="email" value="{{ values.get('email', '') }}" required></label>
+  <label>Číslo ZSSK karty / registrácie
+    <span class="muted">(nájdeš ho v aplikácii Ideme vlakom alebo na karte)</span>
+    <input type="text" name="train_card" value="{{ values.get('train_card', '') }}" required></label>
+
+  <h2>ZSSK konto <span class="muted">(nepovinné)</span></h2>
   {% if zssk_user %}<p>Prihlásenie je nastavené pre: <strong>{{ zssk_user }}</strong></p>
-  {% else %}<p>Prihlásenie nie je nastavené; nákup beží ako hosť a lístky chodia len e-mailom.</p>{% endif %}
-  <label>Prihlasovacie meno (e-mail ZSSK konta)
-    <input type="text" name="zssk_user" value="{{ zssk_user }}"></label>
-  <label>Heslo ZSSK konta (spätne sa nikdy nezobrazuje; prázdne = ponechať uložené)
+  {% else %}<p class="muted">Ak sem zadáš prihlásenie do konta ZSSK, lístky sa ukážu aj
+     v aplikácii Ideme vlakom. Bez neho chodia len e-mailom.</p>{% endif %}
+  <label>Prihlasovacie meno konta (e-mail)
+    <input type="email" name="zssk_user" value="{{ zssk_user }}"></label>
+  <label>Heslo konta <span class="muted">(nezobrazuje sa; prázdne = ponechať uložené)</span>
     <input type="password" name="zssk_pass" value=""></label>
-  <h2>Beh</h2>
-  <label>Pauza medzi nákupmi (sekundy, 15 až 600)
-    <input type="number" name="delay" value="{{ values.get('delay', 45) }}"></label>
-  <button type="submit">Uložiť</button>
+
+  <details class="advanced">
+    <summary>Rozšírené</summary>
+    <label>Pauza medzi nákupmi (sekundy, 15 až 600)
+      <input type="number" name="delay" value="{{ values.get('delay', 45) }}"></label>
+  </details>
+
+  <button type="submit" class="primary">Uložiť</button>
 </form>
 {% if zssk_user %}
 <form method="post" action="{{ url_for('zssk_delete') }}">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-  <button type="submit" class="danger">Odstrániť uložené ZSSK prihlásenie</button>
+  <button type="submit" class="danger">Odstrániť uložené prihlásenie do konta</button>
 </form>
 {% endif %}
 {% endblock %}

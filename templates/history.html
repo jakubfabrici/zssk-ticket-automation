@@ -1,21 +1,29 @@
 {% extends "base.html" %}
-{% block title %}História{% endblock %}
+{% block title %}Kúpené lístky{% endblock %}
 {% block content %}
-<h1>História</h1>
+<h1>Kúpené lístky</h1>
 {% if cfg_error %}<p class="error">{{ cfg_error }}</p>{% endif %}
-{% if not entries %}<p>Evidencia je zatiaľ prázdna.</p>{% endif %}
+{% if not entries %}<p class="muted">Zatiaľ žiadne lístky.</p>{% endif %}
 {% if entries %}
+{% set labels = {'bought': 'kúpený ✓', 'exists': 'už bol vydaný', 'planned': 'čaká', 'failed': 'nepodarilo sa'} %}
 <table>
-  <tr><th>Kľúč</th><th>Stav</th><th>Kedy</th><th>Detail</th></tr>
+  <tr><th>Dátum</th><th>Čas</th><th>Spoj</th><th>Stav</th></tr>
   {% for key, entry in entries %}
-  <tr><td>{{ key }}</td><td>{{ entry.status }}</td><td>{{ entry.at }}</td>
-      <td>{{ entry.get('step', '') }} {{ entry.get('detail', '') }}</td></tr>
+  {% set parts = key.split('|') %}
+  <tr>
+    <td>{{ parts[0] if parts|length > 0 else key }}</td>
+    <td>{{ parts[1] if parts|length > 1 else '' }}</td>
+    <td>{{ parts[2] if parts|length > 2 else '' }}</td>
+    <td>{{ labels.get(entry.status, entry.status) }}</td>
+  </tr>
   {% endfor %}
 </table>
 {% endif %}
-<h2>Záznamy zo zlyhaní</h2>
-{% if not dumps %}<p>Žiadne.</p>{% endif %}
-<ul>{% for name in dumps %}
-  <li><a href="{{ url_for('debug_file', name=name) }}">{{ name }}</a></li>
-{% endfor %}</ul>
+<details class="advanced">
+  <summary>Technické záznamy (užitočné pri probléme)</summary>
+  {% if not dumps %}<p class="muted">Žiadne.</p>{% endif %}
+  <ul>{% for name in dumps %}
+    <li><a href="{{ url_for('debug_file', name=name) }}">{{ name }}</a></li>
+  {% endfor %}</ul>
+</details>
 {% endblock %}

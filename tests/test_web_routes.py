@@ -42,7 +42,7 @@ def create_route(client, **overrides):
 
 def test_empty_state_offers_add(client):
     page = client.get("/routes").get_data(as_text=True)
-    assert "Pridať trasu" in page
+    assert "Pridať spoj" in page
 
 
 def test_create_shows_card_with_plan(client, tmp_path):
@@ -146,4 +146,4 @@ def test_deleting_last_route_renders_empty_state(client, tmp_path):
     client.post("/routes/tatran-ne/delete", data={"csrf": csrf(client)})
     page = client.get("/routes")
     assert page.status_code == 200
-    assert "Zatiaľ žiadne trasy" in page.get_data(as_text=True)
+    assert "Zatiaľ nemáš žiadny spoj" in page.get_data(as_text=True)

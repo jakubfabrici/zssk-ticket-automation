@@ -65,15 +65,16 @@ def wait_for_argv(argv_file, timeout=10):
 def test_buttons_disabled_without_person(env):
     client, _, _ = env
     page = client.get("/routes").get_data(as_text=True)
-    assert "Najprv vyplň osobné údaje" in page
+    assert "vyplň osobné údaje" in page
 
 
 def test_routes_page_hosts_run_panel_and_run_redirects(env):
     client, tmp_path, _ = env
     fill_person(client, tmp_path)
     page = client.get("/routes").get_data(as_text=True)
-    # the run controls are merged onto the main Trasy page
-    assert 'action="/run/start"' in page and "Test" in page
+    # per-connection buy + test controls on the main page
+    assert 'action="/run/confirm"' in page and "Kúpiť lístky" in page
+    assert 'action="/run/start"' in page and "Vyskúšať" in page
     assert 'id="beh"' in page
     # /run stays as a bookmark that redirects to the panel
     r = client.get("/run")
@@ -142,7 +143,7 @@ def test_second_start_while_running_flashes_busy(env, tmp_path):
     response = client.post("/run/start", data={"mode": "dry-run", "route": "",
                                                "csrf": csrf(client)},
                            follow_redirects=True)
-    assert "beží" in response.get_data(as_text=True)
+    assert "Pracujem" in response.get_data(as_text=True)
     client.post("/run/stop", data={"csrf": csrf(client)})
 
 
@@ -155,7 +156,7 @@ def test_history_lists_ledger_and_debug_files(env):
         "2026-09-07|16:58|SNV->Košice": {"status": "bought",
                                           "at": "2026-09-01T12:00:00"}}}))
     page = client.get("/history").get_data(as_text=True)
-    assert "2026-09-07" in page and "bought" in page
+    assert "2026-09-07" in page and "kúpený" in page
     assert "debug-2026-09-07-select_connection-x.png" in page
 
 

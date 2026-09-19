@@ -1,103 +1,120 @@
 {% extends "base.html" %}
-{% block title %}Trasy{% endblock %}
+{% block title %}Moje spoje{% endblock %}
 {% block content %}
-<h1>Trasy a beh</h1>
+<h1>Moje spoje</h1>
 {% if cfg_error %}<p class="error">{{ cfg_error }}</p>{% endif %}
 
-<section class="panel" id="beh">
-  <h2>Spustiť beh</h2>
-  {% if not ready %}
-  <p class="warn">Najprv vyplň osobné údaje v <a href="{{ url_for('settings') }}">Nastaveniach</a>.
-     Bez nich sa nedá spustiť ani test.</p>
+{% if not ready %}
+<div class="card onboarding">
+  <h2>Vitaj! 👋</h2>
+  <p>Aby si mohol kupovať lístky, <strong>najprv vyplň osobné údaje</strong>
+     (meno, e-mail a číslo ZSSK).</p>
+  <a href="{{ url_for('settings') }}"><button class="primary">Vyplniť moje údaje</button></a>
+</div>
+{% endif %}
+
+<div id="beh" class="statusbox {{ 'st-run' if status.running else '' }}" {{ '' if status.running else 'hidden' }}>
+  <span id="state">{% if status.foreign %}Teraz prebieha nákup iného používateľa, skús o chvíľu.{% elif status.running %}⏳ Pracujem, chvíľu strpenia…{% endif %}</span>
+  {% if status.running and not status.foreign %}
+  <form method="post" action="{{ url_for('run_stop') }}" class="inline" id="stopform">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button type="submit">Zastaviť</button>
+  </form>
   {% endif %}
-  <div class="run-controls">
+  <details><summary>Podrobnosti</summary><pre id="log"></pre></details>
+</div>
+
+<div class="section-head">
+  <h2>Spoje</h2>
+  <a href="{{ url_for('route_new') }}"><button class="primary">+ Pridať spoj</button></a>
+</div>
+
+{% if not cards %}
+<div class="card empty">
+  <p>Zatiaľ nemáš žiadny spoj.</p>
+  <p class="muted">Klikni na <strong>„+ Pridať spoj"</strong>, zadaj odkiaľ, kam a čas.
+     Potom pri spoji stlačíš <strong>„Kúpiť lístky"</strong>.</p>
+</div>
+{% endif %}
+
+{% for card in cards %}
+<div class="card {{ '' if card.route.enabled else 'disabled' }}">
+  <h2>{{ card.route.name }}
+    <span class="badge {{ 'on' if card.route.enabled else 'off' }}">{{ 'zapnutý' if card.route.enabled else 'vypnutý' }}</span>
+  </h2>
+  <p class="meta">{{ card.route.trip.departure }} → {{ card.route.trip.arrival }}
+     o {{ card.route.trip.time }}
+     {% if card.route.trip.train %} · {{ card.route.trip.train }}{% endif %}
+     {% if card.weekdays %} · {{ card.weekdays }}{% endif %}</p>
+  <p class="counts">● kúpené {{ card.bought | length }} · ○ naplánované {{ card.planned | length }}
+     {% if card.planned %}<span class="muted">(najbližší {{ card.planned[0].isoformat() }})</span>{% endif %}</p>
+
+  <div class="card-actions">
+    <form method="post" action="{{ url_for('run_confirm') }}" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="mode" value="confirm">
+      <input type="hidden" name="route" value="{{ card.route.id }}">
+      <button type="submit" class="primary buy" {{ '' if ready else 'disabled' }}>Kúpiť lístky</button>
+    </form>
     <form method="post" action="{{ url_for('run_start') }}" class="inline">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <input type="hidden" name="mode" value="dry-run">
-      <label>Trasa
-        <select name="route">
-          <option value="">všetky zapnuté trasy</option>
-          {% for route in routes %}
-          <option value="{{ route.id }}">{{ route.name }} ({{ route.trip.time }})</option>
-          {% endfor %}
-        </select></label>
-      <button type="submit" class="primary" {{ '' if ready else 'disabled' }}>Test</button>
+      <input type="hidden" name="route" value="{{ card.route.id }}">
+      <button type="submit" class="linklike" {{ '' if ready else 'disabled' }}>Vyskúšať (nič nekúpi)</button>
     </form>
-    <form method="post" action="{{ url_for('run_confirm') }}" class="inline"
-          onsubmit="this.route.value = document.querySelector('select[name=route]').value">
-      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="mode" value="confirm">
-      <input type="hidden" name="route" value="">
-      <button type="submit" class="danger" {{ '' if ready else 'disabled' }}>Kúpiť…</button>
-    </form>
-    <form method="post" action="{{ url_for('run_stop') }}" class="inline">
-      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <button type="submit">Zastaviť</button>
-    </form>
-  </div>
-  <p id="state" class="run-state">{{ 'beží: ' + status.label if status.running else 'žiadny beh' }}</p>
-  <pre id="log"></pre>
-</section>
-
-<section>
-  <div class="section-head">
-    <h2>Trasy</h2>
-    <a href="{{ url_for('route_new') }}"><button class="primary">+ Pridať trasu</button></a>
-  </div>
-  {% if not cards %}<p class="muted">Zatiaľ žiadne trasy.</p>{% endif %}
-  {% for card in cards %}
-  <div class="card {{ '' if card.route.enabled else 'disabled' }}">
-    <h2>{{ card.route.name }} <small>({{ card.route.id }})</small>
-      <span class="badge {{ 'on' if card.route.enabled else 'off' }}">{{ 'zapnutá' if card.route.enabled else 'vypnutá' }}</span>
-    </h2>
-    <p class="meta">{{ card.route.trip.departure }} → {{ card.route.trip.arrival }}
-       o {{ card.route.trip.time }}
-       {% if card.route.trip.train %} · vlak {{ card.route.trip.train }}{% endif %}
-       {% if card.weekdays %} · dni: {{ card.weekdays }}{% endif %}
-       {% if card.route.max %} · max {{ card.route.max }}×{% endif %}</p>
-    <details><summary>Naplánované: {{ card.planned | length }}
-       {% if card.planned %} (najbližší {{ card.planned[0].isoformat() }}){% endif %}</summary>
-      <ul>{% for day in card.planned %}<li>{{ day.isoformat() }}</li>{% endfor %}</ul>
+    <details class="more"><summary>Viac</summary>
+      <div class="card-actions">
+        <a href="{{ url_for('route_edit', rid=card.route.id) }}"><button>Upraviť</button></a>
+        <form class="inline" method="post" action="{{ url_for('route_toggle', rid=card.route.id) }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button type="submit">{{ 'Vypnúť' if card.route.enabled else 'Zapnúť' }}</button>
+        </form>
+        <form class="inline" method="post" action="{{ url_for('route_delete', rid=card.route.id) }}"
+              onsubmit="return confirm('Naozaj zmazať tento spoj?')">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="danger">Zmazať</button>
+        </form>
+      </div>
     </details>
-    <details><summary>Kúpené: {{ card.bought | length }}</summary>
-      <ul>{% for day in card.bought %}<li>{{ day }}</li>{% endfor %}</ul>
-    </details>
-    <div class="card-actions">
-      <a href="{{ url_for('route_edit', rid=card.route.id) }}"><button>Upraviť</button></a>
-      <form class="inline" method="post" action="{{ url_for('route_toggle', rid=card.route.id) }}">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-        <button type="submit">{{ 'Vypnúť' if card.route.enabled else 'Zapnúť' }}</button>
-      </form>
-      <form class="inline" method="post" action="{{ url_for('route_delete', rid=card.route.id) }}"
-            onsubmit="return confirm('Naozaj zmazať túto trasu?')">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-        <button type="submit" class="danger">Zmazať</button>
-      </form>
-    </div>
   </div>
-  {% endfor %}
-</section>
+</div>
+{% endfor %}
 
 <script>
 let off = 0;
+const box = document.getElementById('beh');
+const stateEl = document.getElementById('state');
+function set(msg, cls) {
+  box.hidden = false;
+  stateEl.textContent = msg;
+  box.className = 'statusbox ' + (cls || '');
+}
 async function poll() {
-  const response = await fetch('{{ url_for("run_status") }}?offset=' + off);
-  const status = await response.json();
-  off = status.next_offset;
+  let status;
+  try { status = await (await fetch('{{ url_for("run_status") }}?offset=' + off)).json(); }
+  catch (e) { return; }
+  if (typeof status.next_offset === 'number') off = status.next_offset;
+  const stop = document.getElementById('stopform');
   if (status.foreign) {
-    document.getElementById('state').textContent =
-      'prebieha nákup iného používateľa, skús o chvíľu';
+    set('Teraz prebieha nákup iného používateľa, skús o chvíľu.', 'st-wait');
+    if (stop) stop.hidden = true;
     return;
   }
-  if (status.lines.length) {
+  if (status.lines && status.lines.length) {
     const pre = document.getElementById('log');
     pre.textContent += status.lines.join('\n') + '\n';
     pre.scrollTop = pre.scrollHeight;
   }
-  document.getElementById('state').textContent =
-    status.running ? 'beží: ' + status.label
-                   : (status.returncode === null ? 'žiadny beh'
-                      : 'skončil s kódom ' + status.returncode);
+  if (status.running) {
+    set('⏳ Pracujem, chvíľu strpenia…', 'st-run');
+    if (stop) stop.hidden = false;
+  } else if (status.returncode === 0) {
+    set('✅ Hotovo.', 'st-ok');
+    if (stop) stop.hidden = true;
+  } else if (status.returncode !== null && status.returncode !== undefined) {
+    set('⚠️ Nepodarilo sa. Skús znova, alebo otvor Podrobnosti.', 'st-err');
+    if (stop) stop.hidden = true;
+  }
 }
 setInterval(poll, 2000); poll();
 </script>

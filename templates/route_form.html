@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}{{ 'Upraviť trasu' if editing else 'Nová trasa' }}{% endblock %}
+{% block title %}{{ 'Upraviť spoj' if editing else 'Nový spoj' }}{% endblock %}
 {% block content %}
-<h1>{{ 'Upraviť trasu' if editing else 'Nová trasa' }}</h1>
+<h1>{{ 'Upraviť spoj' if editing else 'Nový spoj' }}</h1>
 {% for error in errors %}<p class="error">{{ error }}</p>{% endfor %}
 <form method="post">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-  <label>Názov trasy
+  <label>Názov spoja
     <input type="text" name="name" placeholder="napr. Ranný do Košíc"
            value="{{ values.get('name', '') }}" required></label>
   <label>Odkiaľ

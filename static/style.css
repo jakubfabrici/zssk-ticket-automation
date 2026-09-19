@@ -197,3 +197,21 @@ fieldset.days legend { color: var(--muted); font-size: .9rem; padding: 0 .3rem; 
 label.check { display: flex; align-items: center; gap: .4rem; color: var(--text); }
 details.advanced { margin: .6rem 0; }
 details.advanced summary { color: var(--muted); cursor: pointer; }
+
+/* ---- foolproof main page ---- */
+.card.onboarding { border-left: 3px solid var(--accent); }
+.card.empty { text-align: center; }
+.counts { color: var(--muted); font-size: .95rem; margin: .2rem 0 .7rem; }
+button.buy { font-size: 1.05rem; padding: .6rem 1.5rem; }
+.statusbox { border: 1px solid var(--border); border-radius: 10px; padding: .7rem .9rem;
+             margin: .8rem 0; background: var(--surface); display: flex; flex-wrap: wrap;
+             align-items: center; gap: .8rem; }
+.statusbox #state { font-weight: 600; }
+.statusbox.st-run  { border-color: var(--accent); }
+.statusbox.st-ok   { border-color: #2f6f5f; background: #16302a; }
+.statusbox.st-err  { border-color: #7a2f2f; background: #3a1d1d; }
+.statusbox.st-wait { border-color: #7a5f20; background: #33290f; }
+.statusbox details { width: 100%; }
+details.more { display: inline-block; margin-left: .2rem; }
+details.more > summary { display: inline; color: var(--muted); }
+details.more .card-actions { margin-top: .5rem; }

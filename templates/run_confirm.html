@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Potvrdenie nákupu{% endblock %}
 {% block content %}
-<h1>Naozaj kúpiť?</h1>
-<p class="error">Toto reálne objedná lístky na všetky dátumy nižšie.</p>
+<h1>Potvrď nákup lístkov</h1>
+<p class="warn">Kúpia sa lístky na všetky dátumy nižšie. Chceš pokračovať?</p>
 {% for route, days in preview %}
 <div class="card">
   <h2>{{ route.name }}: {{ route.trip.departure }} → {{ route.trip.arrival }}
@@ -17,7 +17,7 @@
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
   <input type="hidden" name="mode" value="confirm">
   <input type="hidden" name="route" value="{{ route_id }}">
-  <button type="submit" class="danger">Áno, kúpiť</button>
+  <button type="submit" class="danger">Áno, kúpiť lístky</button>
   <a href="{{ url_for('routes_list') }}"><button type="button">Späť</button></a>
 </form>
 {% endblock %}
