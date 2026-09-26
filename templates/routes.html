@@ -46,7 +46,7 @@
      o {{ card.route.trip.time }}
      {% if card.route.trip.train %} · {{ card.route.trip.train }}{% endif %}
      {% if card.weekdays %} · {{ card.weekdays }}{% endif %}</p>
-  <p class="counts">● kúpené {{ card.bought | length }} · ○ naplánované {{ card.planned | length }}
+  <p class="counts">○ naplánované: {{ card.planned | length }} dní
      {% if card.planned %}<span class="muted">(najbližší {{ card.planned[0].isoformat() }})</span>{% endif %}</p>
 
   <div class="card-actions">

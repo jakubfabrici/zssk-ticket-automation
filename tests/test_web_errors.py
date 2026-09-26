@@ -87,7 +87,7 @@ def test_bad_weekday_run_confirm_redirects_with_flash(client, tmp_path):
 
 # ---- a routes.json that is not JSON at all --------------------------------
 
-@pytest.mark.parametrize("path", ["/routes", "/history", "/settings"])
+@pytest.mark.parametrize("path", ["/routes", "/settings"])
 def test_corrupt_json_read_views_still_answer(client, tmp_path, path):
     write_routes(tmp_path, "{ this is not json")
     response = client.get(path)
@@ -117,12 +117,3 @@ def test_corrupt_json_toggle_flashes_instead_of_dying(client, tmp_path):
 
 # ---- a corrupt ledger, with a perfectly good routes.json -------------------
 
-def test_corrupt_ledger_shows_banner_but_serves_pages(client, tmp_path):
-    write_routes(tmp_path, json.dumps({"routes": [VALID_ROUTE]}))
-    zssk_users.ledger_file(tmp_path / "state", "jakub").write_text("nope", encoding="utf-8")
-    routes_page = client.get("/routes")
-    assert routes_page.status_code == 200
-    assert "Evidencia" in routes_page.get_data(as_text=True)
-    history_page = client.get("/history")
-    assert history_page.status_code == 200
-    assert "Evidencia" in history_page.get_data(as_text=True)

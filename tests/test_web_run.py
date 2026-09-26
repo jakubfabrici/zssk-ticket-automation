@@ -147,18 +147,6 @@ def test_second_start_while_running_flashes_busy(env, tmp_path):
     client.post("/run/stop", data={"csrf": csrf(client)})
 
 
-def test_history_lists_ledger_and_debug_files(env):
-    client, tmp_path, _ = env
-    debug = zssk_users.debug_dir(tmp_path / "state", "jakub")
-    debug.mkdir(parents=True, exist_ok=True)
-    (debug / "debug-2026-09-07-select_connection-x.png").write_bytes(b"png")
-    zssk_users.ledger_file(tmp_path / "state", "jakub").write_text(json.dumps({"entries": {
-        "2026-09-07|16:58|SNV->Košice": {"status": "bought",
-                                          "at": "2026-09-01T12:00:00"}}}))
-    page = client.get("/history").get_data(as_text=True)
-    assert "2026-09-07" in page and "kúpený" in page
-    assert "debug-2026-09-07-select_connection-x.png" in page
-
 
 def test_debug_file_names_are_whitelisted(env):
     client, tmp_path, _ = env

@@ -8,13 +8,14 @@ actually needs:
 
   * plan a whole booking window at once -- every matching weekday from today to
     the end of the e-shop's selling horizon;
-  * remember what was already bought in a ledger, so a re-run tops the window
-    up instead of buying duplicates;
+  * attempt every matching day on each run -- the shop itself refuses a date
+    that still has a valid free ticket, so a returned ticket is simply bought
+    again and there is no local record that can go stale;
   * address the page by what the elements *are* (test attributes, ids, visible
     Slovak labels) with ordered fallbacks, so one renamed generated id does not
     take the whole flow down.
 
-Only the checkout flow needs Selenium; the planning, ledger and configuration
+Only the checkout flow needs Selenium; the planning and configuration
 logic is importable and testable without a browser.
 """
 
@@ -49,10 +50,10 @@ BOOKING_HORIZON_DAYS = 60
 
 DEFAULT_URL = "https://predaj.zssk.sk/search"
 
-# Where install.sh puts the ledger. A bare CLI run (no --config, no --ledger)
-# must share it with the deployed web UI and timer, so the two never buy the
-# same date twice; the run lock is derived from this path as well.
-STATE_LEDGER = Path("/var/lib/zssk/ledger.json")
+# A bare CLI run shares one run lock with the deployed web UI and timer so two
+# runs never drive the same Firefox profile at once. No ticket ledger is kept:
+# the shop itself refuses a date that already has a valid free ticket.
+STATE_LOCK = Path("/var/lib/zssk/run.lock")
 ETC_CREDENTIALS = Path("/etc/zssk/credentials.env")
 
 
@@ -287,16 +288,15 @@ def plan_dates(
     trip: Trip,
     today: dt.date,
     horizon_days: int = BOOKING_HORIZON_DAYS,
-    already: set[str] | None = None,
     start: dt.date | None = None,
     limit: int | None = None,
 ) -> list[dt.date]:
-    """Every day in the selling window that matches the trip and is not bought yet.
+    """Every day in the selling window that matches the trip.
 
     The window starts today (or `start`, whichever is later -- the e-shop cannot
-    sell into the past) and ends `horizon_days` after today.
+    sell into the past) and ends `horizon_days` after today. No ledger is
+    consulted: the shop refuses a date that already has a valid free ticket.
     """
-    already = already or set()
     horizon_days = min(horizon_days, BOOKING_HORIZON_DAYS)
     first = max(start or today, today)
     last = today + dt.timedelta(days=horizon_days)
@@ -304,7 +304,7 @@ def plan_dates(
     out: list[dt.date] = []
     day = first
     while day <= last:
-        if trip.matches(day) and trip.key(day) not in already:
+        if trip.matches(day):
             out.append(day)
             if limit is not None and len(out) >= limit:
                 break
@@ -315,57 +315,6 @@ def plan_dates(
 def zssk_date(day: dt.date) -> str:
     """The format the search form itself renders: "1. 9. 2026"."""
     return f"{day.day}. {day.month}. {day.year}"
-
-
-# --------------------------------------------------------------------------
-# ledger
-# --------------------------------------------------------------------------
-
-@dataclass
-class Ledger:
-    """Append-only JSON record of what was bought, so re-runs are idempotent.
-
-    Kept as a single JSON document (a handful of entries per booking window)
-    and written atomically, so an interrupted run cannot truncate the history
-    of tickets that were actually paid for.
-    """
-
-    path: Path
-    entries: dict[str, dict] = field(default_factory=dict)
-
-    @classmethod
-    def load(cls, path: str | os.PathLike[str]) -> Ledger:
-        p = Path(path)
-        if not p.exists():
-            return cls(path=p)
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            # A corrupt ledger must not silently license duplicate purchases.
-            raise SystemExit(f"{p}: ledger is not valid JSON; fix or move it aside") from exc
-        return cls(path=p, entries=raw.get("entries", {}))
-
-    def bought(self) -> set[str]:
-        # "exists" = the shop reported a ticket issued outside this ledger;
-        # covered is covered, so re-runs must not retry the date.
-        return {k for k, v in self.entries.items()
-                if v.get("status") in ("bought", "exists")}
-
-    def record(self, key: str, status: str, **fields) -> None:
-        self.entries[key] = {
-            "status": status,
-            "at": dt.datetime.now().isoformat(timespec="seconds"),
-            **fields,
-        }
-        self.save()
-
-    def save(self) -> None:
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps({"entries": self.entries}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(self.path)
 
 
 # --------------------------------------------------------------------------
@@ -1058,7 +1007,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="zssk_bulk.py",
         description=(
             "Buy the zero-fare tickets for a recurring commute across the whole "
-            "selling window at once, skipping dates already in the ledger."
+            "selling window at once."
         ),
         epilog=(
             "EXAMPLES\n"
@@ -1095,8 +1044,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--url", default=None, help=f"Search page (default {DEFAULT_URL}).")
     parser.add_argument("--person", "-p", default=None,
                         help="Passenger file (default person.txt next to this script).")
-    parser.add_argument("--ledger", default=None,
-                        help="Purchase ledger (default tickets.json next to this script).")
+    parser.add_argument("--lock", default=None,
+                        help="Run-lock file (default run.lock in the state dir).")
     parser.add_argument("--debug-dir", default=None,
                         help=f"Where failure dumps go (default {here}).")
     parser.add_argument("--download-dir", default=None,
@@ -1155,8 +1104,8 @@ def resolve_settings(args, config: dict) -> dict:
         "delay": float(pick("delay", 45)),
         "url": pick("url", DEFAULT_URL),
         "person": pick("person", str(here / "person.txt")),
-        "ledger": pick("ledger", str(STATE_LEDGER)
-                       if STATE_LEDGER.parent.is_dir() else str(here / "tickets.json")),
+        "lock": pick("lock", str(STATE_LOCK)
+                     if STATE_LOCK.parent.is_dir() else str(here / "run.lock")),
         "debug_dir": pick("debug_dir", str(here)),
         "train": pick("train"),
         "download_dir": pick("download_dir", None),
@@ -1182,16 +1131,15 @@ def summarise(results: list[tuple[dt.date, str, str]]) -> str:
     return "\n".join(lines)
 
 
-def acquire_run_lock(ledger_path: str):
+def acquire_run_lock(lock_path: str):
     """One purchase run at a time, across every entry point (web, timer, CLI).
 
-    The lock file sits next to the ledger, because the ledger is what two
-    concurrent runs would break: both read it before either writes, and the
-    same date gets bought twice. flock conflicts even between two file
+    Two concurrent runs would drive the same Firefox profile and could double
+    buy; the flock serialises them. flock conflicts even between two file
     descriptors of one process, so the unit test can prove it in-process.
     The caller keeps the returned file object alive until the process exits.
     """
-    lock_file = Path(str(ledger_path) + ".lock")
+    lock_file = Path(lock_path)
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     handle = open(lock_file, "w")
     try:
@@ -1216,14 +1164,13 @@ def already_departed(day: dt.date, hhmm: str, now: dt.datetime) -> bool:
     return now.time() >= dt.time(hour, minute)
 
 
-def build_work(routes: list[Route], ledger: Ledger, today: dt.date,
+def build_work(routes: list[Route], today: dt.date,
                horizon_days: int, start: dt.date | None,
                cap: int | None) -> list[tuple[Route, dt.date]]:
     """Everything to buy, grouped by route, capped globally by --max."""
     work: list[tuple[Route, dt.date]] = []
     for route in routes:
-        for day in plan_dates(route.trip, today, horizon_days,
-                              ledger.bought(), start, route.max):
+        for day in plan_dates(route.trip, today, horizon_days, start, route.max):
             work.append((route, day))
     return work[:cap] if cap else work
 
@@ -1272,11 +1219,10 @@ def main(argv: list[str] | None = None) -> int:
         dt.datetime.strptime(settings["start"], "%d.%m.%Y").date()
         if settings["start"] else None
     )
-    ledger = Ledger.load(settings["ledger"])
     cap = int(settings["max"]) if settings["max"] else None
     # The global cap is applied only AFTER dropping today's already-departed
     # trains, or --max N could spend its whole budget on unbuyable dates.
-    work = build_work(routes, ledger, dt.date.today(), settings["horizon_days"],
+    work = build_work(routes, dt.date.today(), settings["horizon_days"],
                       start, None)
 
     now = dt.datetime.now()
@@ -1296,7 +1242,6 @@ def main(argv: list[str] | None = None) -> int:
         log.info("%s: %s -> %s at %s%s: %d date(s) to buy", route.id,
                  route.trip.departure, route.trip.arrival, route.trip.time,
                  label, count)
-    log.info("%d already in the ledger", len(ledger.bought()))
 
     if args.list or not work:
         current = None
@@ -1315,7 +1260,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             "person.txt still holds the example passenger - fill in the real "
             "data first (web UI Nastavenia, or edit /etc/zssk/person.txt)")
-    run_lock = acquire_run_lock(settings["ledger"])   # held until process exit
+    run_lock = acquire_run_lock(settings["lock"])   # held until process exit
     assert run_lock is not None
     dry_run = not args.confirm
     if dry_run:
@@ -1361,8 +1306,6 @@ def main(argv: list[str] | None = None) -> int:
                                  discount_id=settings["discount_id"])
             except AlreadyIssued as exc:
                 detail = str(exc)[:120]
-                if not dry_run:
-                    ledger.record(route.trip.key(day), "exists", detail=detail)
                 results.append((day, "exists", detail))
                 log.info("%s: lístok už existuje, označujem ako pokrytý", day.isoformat())
                 continue
@@ -1370,9 +1313,6 @@ def main(argv: list[str] | None = None) -> int:
                 step = getattr(exc, "step", type(exc).__name__)
                 detail = str(exc).splitlines()[0][:120]
                 dump_state(driver, f"{day.isoformat()}-{step}", debug_dir)
-                if not dry_run:
-                    ledger.record(route.trip.key(day), "failed",
-                                  step=step, detail=detail)
                 results.append((day, "failed", f"{step}: {detail}"))
                 consecutive_failures += 1
                 log.error("%s failed at %s: %s", day.isoformat(), step, detail)
@@ -1385,10 +1325,6 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             consecutive_failures = 0
-            if status == "bought":
-                ledger.record(route.trip.key(day), "bought", time=route.trip.time,
-                              departure=route.trip.departure,
-                              arrival=route.trip.arrival)
             results.append((day, status, ""))
             log.info("%s %s", day.isoformat(), status)
     finally:

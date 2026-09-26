@@ -371,19 +371,11 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
 
 
 def route_overview(app: Flask, route, today=None):
-    """(planned dates, bought ISO date strings) for one route, from the ledger."""
+    """Planned dates for one route: every matching day in the selling window."""
     cfg = read_cfg_safe(app)
-    try:
-        ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
-    except SystemExit as exc:
-        raise ConfigError(f"Evidencia sa nedá načítať: {exc}") from exc
     horizon = int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS))
-    planned = zssk_bulk.plan_dates(route.trip, today or dt.date.today(),
-                                   horizon, ledger.bought(), None, route.max)
-    suffix = f"|{route.trip.time}|{route.trip.departure}->{route.trip.arrival}"
-    bought = sorted(key.split("|", 1)[0] for key, value in ledger.entries.items()
-                    if value.get("status") == "bought" and key.endswith(suffix))
-    return planned, bought
+    return zssk_bulk.plan_dates(route.trip, today or dt.date.today(),
+                                horizon, None, route.max)
 
 
 def _slugify(text: str) -> str:
@@ -463,8 +455,8 @@ def register_views(app: Flask) -> None:
         cards = []
         try:
             for route in routes:
-                planned, bought = route_overview(app, route)
-                cards.append({"route": route, "planned": planned, "bought": bought,
+                planned = route_overview(app, route)
+                cards.append({"route": route, "planned": planned,
                               "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
         except ConfigError as exc:
             cards, cfg_error = [], str(exc)
@@ -668,7 +660,7 @@ def register_views(app: Flask) -> None:
         if not ready:
             abort(400)
         try:
-            preview = [(route, route_overview(app, route)[0]) for route in routes]
+            preview = [(route, route_overview(app, route)) for route in routes]
         except ConfigError as exc:
             flash(str(exc))
             return redirect(url_for("routes_list"))
@@ -693,7 +685,7 @@ def register_views(app: Flask) -> None:
             "--config", str(zssk_users.routes_file(etc, uid)),
             "--person", str(zssk_users.person_file(etc, uid)),
             "--credentials", str(zssk_users.credentials_file(etc, uid)),
-            "--ledger", str(zssk_users.ledger_file(state, uid)),
+            "--lock", str(zssk_users.user_state(state, uid) / "run.lock"),
             "--debug-dir", str(zssk_users.debug_dir(state, uid)),
             "--profile-dir", str(zssk_users.profile_dir(state, uid)),
             "--download-dir", str(zssk_users.downloads_dir(state, uid))]
@@ -732,73 +724,6 @@ def register_views(app: Flask) -> None:
         app.config["RUNNER"].stop()
         flash("Beh zastavený.")
         return redirect(url_for("routes_list"))
-
-    @app.route("/kalendar")
-    @login_required
-    def calendar_view():
-        """Month grid: which day is covered, planned, or failed, at a glance."""
-        cfg = read_cfg_safe(app)
-        routes, cfg_error = safe_routes(app)
-        today = dt.date.today()
-        try:
-            year, month = (int(x) for x in request.args.get("mesiac", "").split("-"))
-            month_first = dt.date(year, month, 1)
-        except ValueError:
-            month_first = today.replace(day=1)
-
-        day_items: dict = {}
-        try:
-            ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
-            entries = ledger.entries
-        except SystemExit as exc:
-            entries = {}
-            cfg_error = cfg_error or f"Evidencia sa nedá načítať: {exc}"
-        for key, entry in entries.items():
-            try:
-                date_part, time_part, _ = key.split("|", 2)
-                day = dt.date.fromisoformat(date_part)
-            except ValueError:
-                continue
-            day_items.setdefault(day, []).append(
-                {"time": time_part, "status": entry.get("status", "failed")})
-        try:
-            for route in (r for r in routes if r.enabled):
-                planned, _ = route_overview(app, route)
-                for day in planned:
-                    day_items.setdefault(day, []).append(
-                        {"time": route.trip.time, "status": "planned"})
-        except ConfigError as exc:
-            cfg_error = cfg_error or str(exc)
-        for items in day_items.values():
-            items.sort(key=lambda item: (item["time"], item["status"]))
-
-        weeks = cal.Calendar(firstweekday=0).monthdatescalendar(
-            month_first.year, month_first.month)
-        horizon_end = today + dt.timedelta(
-            days=int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS)))
-        return render_template(
-            "calendar.html", weeks=weeks, month_first=month_first, today=today,
-            day_items=day_items, horizon_end=horizon_end, cfg_error=cfg_error,
-            prev_month=(month_first - dt.timedelta(days=1)).replace(day=1),
-            next_month=(month_first + dt.timedelta(days=32)).replace(day=1))
-
-    @app.route("/history")
-    @login_required
-    def history():
-        cfg = read_cfg_safe(app)
-        cfg_error = None
-        try:
-            ledger = zssk_bulk.Ledger.load(ledger_path(app, cfg))
-            entries = sorted(ledger.entries.items(),
-                             key=lambda item: item[1].get("at", ""), reverse=True)
-        except SystemExit as exc:
-            entries, cfg_error = [], f"Evidencia sa nedá načítať: {exc}"
-        directory = debug_dir(app, cfg)
-        dumps = sorted((p.name for p in directory.glob("debug-*")
-                        if DEBUG_NAME_RE.fullmatch(p.name)), reverse=True) \
-            if directory.exists() else []
-        return render_template("history.html", entries=entries, dumps=dumps,
-                               cfg_error=cfg_error)
 
     @app.route("/debug/<path:name>")
     @login_required

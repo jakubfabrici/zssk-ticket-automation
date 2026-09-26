@@ -13,8 +13,7 @@
   {% if authed %}
   <nav>
     {# The guard lets this base render before optional views exist. #}
-    {% for endpoint, label in [('routes_list', 'Spoje'), ('calendar_view', 'Kalendár'),
-                               ('history', 'Lístky'), ('settings', 'Nastavenia')] %}
+    {% for endpoint, label in [('routes_list', 'Spoje'), ('settings', 'Nastavenia')] %}
       {% if endpoint in view_names %}
         <a href="{{ url_for(endpoint) }}"{% if endpoint == request.endpoint %} class="active"{% endif %}>{{ label }}</a>
       {% endif %}
