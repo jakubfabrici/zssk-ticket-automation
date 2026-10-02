@@ -43,7 +43,7 @@ pytestmark = pytest.mark.skipif(
 
 def _load():
     spec = importlib.util.spec_from_file_location(
-        "zssk_bulk", ROOT / "deploy" / "zssk" / "zssk_bulk.py")
+        "zssk_bulk", ROOT / "zssk_bulk.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules["zssk_bulk"] = module
     spec.loader.exec_module(module)
