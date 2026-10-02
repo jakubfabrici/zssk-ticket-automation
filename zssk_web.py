@@ -1,0 +1,824 @@
+"""Web UI for the ZSSK bulk buyer. LAN only, one password, Slovak copy.
+
+The purchase itself always runs as a separate zssk_bulk.py process (see
+zssk_runner.py); this app only edits configuration and relays output. It
+deliberately has no idea how to drive a browser.
+"""
+from __future__ import annotations
+
+import calendar as cal
+import datetime as dt
+import hmac
+import json
+import os
+import re
+import unicodedata
+import secrets
+import shutil
+import threading
+import time
+from functools import wraps
+from pathlib import Path
+
+from flask import (Flask, abort, current_app, jsonify, redirect,
+                   render_template, request, send_from_directory, session,
+                   url_for, flash)
+
+import zssk_bulk
+import zssk_users
+from zssk_runner import RunnerBusy
+from zssk_users import UserStore
+
+DEFAULT_BULK_ARGV = ["/usr/bin/xvfb-run", "-a",
+                     "/opt/zssk/.venv/bin/python", "/opt/zssk/zssk_bulk.py"]
+GLOBAL_KEYS = ("delay", "horizon_days", "url", "person", "ledger",
+               "debug_dir", "download_dir", "profile_dir", "start")
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+# ---- config file helpers ---------------------------------------------------
+
+def routes_path(app: Flask) -> Path:
+    return zssk_users.routes_file(app.config["ETC_DIR"], current_uid())
+
+
+def read_cfg(app: Flask) -> dict:
+    path = routes_path(app)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_cfg(app: Flask, cfg: dict) -> None:
+    path = routes_path(app)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
+class ConfigError(Exception):
+    """A config file the CLI parser rejects, carried as a Slovak message."""
+
+
+def read_cfg_safe(app: Flask) -> dict:
+    """Config for read-only views: corrupt JSON degrades to {}, never a 500."""
+    try:
+        return read_cfg(app)
+    except ValueError:
+        return {}
+
+
+def safe_routes(app: Flask):
+    """(routes, error): a broken routes.json shows an error instead of killing the view."""
+    try:
+        return zssk_bulk.load_routes(read_cfg(app)), None
+    except (SystemExit, ValueError) as exc:
+        return [], f"routes.json sa nedá načítať: {exc}"
+
+
+def route_to_dict(route: "zssk_bulk.Route") -> dict:
+    return {"id": route.id, "name": route.name,
+            "departure": route.trip.departure, "arrival": route.trip.arrival,
+            "time": route.trip.time, "train": route.trip.train,
+            "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays),
+            "max": route.max, "enabled": route.enabled}
+
+
+def normalized(cfg: dict) -> dict:
+    """Any config (legacy flat or new) as the new format, globals carried over."""
+    if "routes" in cfg:
+        return cfg
+    out = {key: cfg[key] for key in GLOBAL_KEYS if key in cfg}
+    try:
+        out["routes"] = [route_to_dict(r) for r in zssk_bulk.load_routes(cfg)]
+    except (SystemExit, ValueError) as exc:
+        raise ConfigError(f"routes.json sa nedá načítať: {exc}") from exc
+    return out
+
+
+CFG_LOCK = threading.Lock()
+
+
+def mutate_cfg(app: Flask, mutate) -> dict:
+    """Read-modify-write of routes.json under one lock.
+
+    Two browser tabs POSTing at once must not interleave their read and write.
+    The purchase itself is protected separately, by acquire_run_lock in the CLI.
+    """
+    with CFG_LOCK:
+        try:
+            cfg = normalized(read_cfg(app))
+        except ValueError as exc:
+            raise ConfigError(f"routes.json je poškodený JSON: {exc}") from exc
+        mutate(cfg)
+        write_cfg(app, cfg)
+        return cfg
+
+
+def normalized_cfg(app: Flask) -> dict:
+    """normalized(read_cfg(...)), with unparsable JSON raised as ConfigError too."""
+    try:
+        return normalized(read_cfg(app))
+    except ValueError as exc:
+        raise ConfigError(f"routes.json je poškodený JSON: {exc}") from exc
+
+
+class _DuplicateRoute(Exception):
+    """Raised inside mutate_cfg when the locked re-check finds the id taken."""
+
+
+def ledger_path(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.ledger_file(app.config["STATE_DIR"], current_uid())
+
+
+def person_path(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.person_file(app.config["ETC_DIR"], current_uid())
+
+
+def debug_dir(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.debug_dir(app.config["STATE_DIR"], current_uid())
+
+
+def credentials_path(app: Flask, cfg: dict | None = None) -> Path:
+    return zssk_users.credentials_file(app.config["ETC_DIR"], current_uid())
+
+
+def credentials_state(app: Flask, cfg: dict) -> str:
+    """The stored ZSSK konto user name, or "" when not configured."""
+    creds = zssk_bulk.load_credentials(credentials_path(app, cfg))
+    return creds[0] if creds else ""
+
+
+def person_ok(app: Flask) -> bool:
+    try:
+        person = zssk_bulk.load_person(person_path(app, read_cfg_safe(app)))
+    except (OSError, ValueError):
+        return False
+    return "example.com" not in person.email
+
+
+# ---- env file (credentials) -------------------------------------------------
+
+def save_env(path: Path, values: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    # 0600 from the first byte: this holds the password hash and session
+    # secret, and write-then-chmod leaves a world-readable window.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write("".join(f"{k}={v}\n" for k, v in values.items()))
+    tmp.replace(path)
+
+
+# ---- admin: safe per-user directory removal ---------------------------------
+
+def _safe_rmtree(users_root: Path, uid: str) -> None:
+    """Delete users_root/uid only when it is a real directory that truly sits
+    directly under users_root (no symlink escape, no path games). uid is
+    already registry-validated, but rmtree on personal data warrants belt and
+    braces."""
+    if not zssk_users.valid_uid(uid):
+        return
+    target = Path(users_root) / uid
+    if target.is_symlink() or not target.is_dir():
+        return
+    if target.resolve().parent != Path(users_root).resolve():
+        return
+    shutil.rmtree(target, ignore_errors=True)
+
+
+# ---- auth: current user + decorators ---------------------------------------
+
+def current_uid() -> str | None:
+    uid = session.get("uid")
+    return uid if uid and zssk_users.valid_uid(uid) else None
+
+
+def current_user(app: Flask) -> dict | None:
+    uid = current_uid()
+    return app.config["USERS"].get(uid) if uid else None
+
+
+def login_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        app = current_app
+        if not current_uid() or not app.config["USERS"].exists(current_uid()):
+            session.clear()
+            if request.method == "POST" or request.is_json:
+                abort(401)
+            return redirect(url_for("login"))
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        user = current_user(current_app)
+        if not user:
+            return redirect(url_for("login"))
+        if not user.get("is_admin"):
+            abort(403)
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+# ---- app factory -----------------------------------------------------------
+
+def create_app(etc_dir: Path, state_dir: Path, runner,
+               bulk_argv: list[str] | None = None,
+               fail_delay: float = 1.0) -> Flask:
+    app = Flask(__name__)
+    etc_dir = Path(etc_dir)
+    state_dir = Path(state_dir)
+    etc_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    app.config.update(
+        ETC_DIR=etc_dir, STATE_DIR=state_dir,
+        RUNNER=runner,
+        BULK_ARGV=list(bulk_argv or DEFAULT_BULK_ARGV),
+        FAIL_DELAY=fail_delay,
+    )
+    store = UserStore(etc_dir)
+    app.config["USERS"] = store
+    # One-time fold of the old single-user files into an admin user.
+    zssk_users.migrate_single_user(etc_dir, state_dir)
+    app.secret_key = store.secret() if store.users() else secrets.token_hex(32)
+    app.permanent_session_lifetime = dt.timedelta(days=14)
+
+    @app.context_processor
+    def _globals():
+        def csrf_token() -> str:
+            return session.setdefault("csrf", secrets.token_hex(16))
+        return {"csrf_token": csrf_token,
+                "authed": bool(current_uid()),
+                "is_admin": bool((session.get("uid") and
+                                  app.config["USERS"].get(session["uid"]) or {}).get("is_admin")),
+                "view_names": set(app.view_functions)}
+
+    @app.before_request
+    def gate():
+        if request.endpoint in (None, "static"):
+            return None
+        store = app.config["USERS"]
+        if not store.users():
+            return None if request.endpoint == "setup" else redirect(url_for("setup"))
+        if request.endpoint in ("login", "setup", "setup_password"):
+            return None
+        if not current_uid() or not store.exists(current_uid()):
+            session.clear()
+            return redirect(url_for("login"))
+        if request.method == "POST":
+            token = session.get("csrf", "")
+            sent = request.form.get("csrf", "")
+            if not token or not hmac.compare_digest(sent, token):
+                abort(400)
+        return None
+
+    @app.route("/")
+    def index():
+        return redirect(url_for("routes_list"))
+
+    @app.route("/setup", methods=["GET", "POST"])
+    def setup():
+        store = app.config["USERS"]
+        if store.users():
+            return redirect(url_for("login"))
+        # install.sh drops a one-time token here, so a stranger on the LAN
+        # cannot claim a freshly deployed panel before its owner first visits.
+        token_path = app.config["ETC_DIR"] / "setup-token"
+        need_token = token_path.exists()
+        error = None
+        if request.method == "POST":
+            uid = request.form.get("username", "").strip().lower()
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+            if not zssk_users.valid_uid(uid):
+                error = "Prihlasovacie meno: len a-z, 0-9, _, - (1 až 30 znakov)."
+            elif len(password) < 8:
+                error = "Heslo musí mať aspoň 8 znakov."
+            elif password != password2:
+                error = "Heslá sa nezhodujú."
+            elif need_token and not hmac.compare_digest(
+                    request.form.get("token", "").strip(),
+                    token_path.read_text(encoding="utf-8").strip()):
+                error = "Neplatný inštalačný token (install.sh ho vypísal na konci)."
+            else:
+                store.add(uid, is_admin=True)
+                store.set_password(uid, password)
+                app.secret_key = store.secret()
+                session.clear()
+                session["uid"] = uid
+                session.permanent = True
+                token_path.unlink(missing_ok=True)
+                return redirect(url_for("routes_list"))
+        return render_template("setup.html", error=error, need_token=need_token)
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        store = app.config["USERS"]
+        error = None
+        if request.method == "POST":
+            uid = request.form.get("username", "").strip().lower()
+            password = request.form.get("password", "")
+            if store.verify(uid, password):
+                session.clear()
+                session["uid"] = uid
+                session.permanent = True
+                return redirect(url_for("routes_list"))
+            time.sleep(app.config["FAIL_DELAY"])
+            error = "Nesprávny login alebo heslo."
+        needs_setup = [u for u in store.users() if not store.has_password(u)]
+        return render_template("login.html", error=error, needs_setup=needs_setup)
+
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
+    @app.route("/setup-password/<uid>", methods=["GET", "POST"])
+    def setup_password(uid):
+        store = app.config["USERS"]
+        user = store.get(uid)
+        if not user:
+            abort(404)
+        if store.has_password(uid):
+            flash("Heslo už je nastavené, prihlás sa.")
+            return redirect(url_for("login"))
+        token = request.values.get("token", "")
+        if not store.check_invite(uid, token):
+            abort(403)
+        error = None
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+            if len(password) < 8:
+                error = "Heslo musí mať aspoň 8 znakov."
+            elif password != password2:
+                error = "Heslá sa nezhodujú."
+            else:
+                store.set_password(uid, password)   # consumes the invite token
+                session.clear()
+                session["uid"] = uid
+                session.permanent = True
+                return redirect(url_for("routes_list"))
+        return render_template("setup_password.html", uid=uid, error=error, token=token)
+
+    register_views(app)
+    return app
+
+
+def route_overview(app: Flask, route, today=None):
+    """Planned dates for one route: every matching day in the selling window."""
+    cfg = read_cfg_safe(app)
+    horizon = int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS))
+    return zssk_bulk.plan_dates(route.trip, today or dt.date.today(),
+                                horizon, None, route.max)
+
+
+def _slugify(text: str) -> str:
+    ascii_ = (unicodedata.normalize("NFKD", text)
+              .encode("ascii", "ignore").decode("ascii").lower())
+    return re.sub(r"[^a-z0-9]+", "-", ascii_).strip("-")[:32].strip("-")
+
+
+def _unique_slug(base: str, existing: set[str]) -> str:
+    base = base or "trasa"
+    cand, i = base, 2
+    while cand in existing:
+        suffix = f"-{i}"
+        cand = (base[:32 - len(suffix)].strip("-") or "trasa") + suffix
+        i += 1
+    return cand
+
+
+def parse_route_form(form, existing_ids: set[str],
+                     editing_id: str | None = None) -> tuple[dict | None, list[str]]:
+    errors: list[str] = []
+    name = form.get("name", "").strip()
+    departure = form.get("departure", "").strip()
+    arrival = form.get("arrival", "").strip()
+    time_value = form.get("time", "").strip()
+    train = form.get("train", "").strip()
+    # Weekdays arrive as day checkboxes (several values); a non-form caller can
+    # still pass a comma string.
+    if hasattr(form, "getlist"):
+        weekdays = ",".join(d.strip() for d in form.getlist("weekdays") if d.strip())
+    else:
+        weekdays = form.get("weekdays", "").strip()
+    max_raw = form.get("max", "").strip()
+
+    # The id is no longer typed by the user; for a new route it is derived from
+    # the name (slug, made unique). Editing keeps the existing id.
+    if editing_id is not None:
+        route_id = editing_id
+    elif not name:
+        errors.append("Názov trasy je povinný.")
+        route_id = ""
+    else:
+        route_id = _unique_slug(_slugify(name), existing_ids)
+    if not departure or not arrival:
+        errors.append("Stanice sú povinné.")
+    if not TIME_RE.fullmatch(time_value):
+        errors.append("Čas odchodu musí byť v tvare HH:MM.")
+    for label, value in (("Názov", name), ("Odkiaľ", departure),
+                         ("Kam", arrival), ("Vlak", train)):
+        if "#" in value:
+            errors.append(f"{label}: znak # nie je povolený.")
+    try:
+        zssk_bulk.parse_weekdays(weekdays or "")
+    except ValueError as exc:
+        errors.append(f"Dni v týždni: {exc}")
+    max_value: int | None = None
+    if max_raw:
+        if not max_raw.isdigit() or int(max_raw) < 1:
+            errors.append("Počet opakovaní musí byť kladné celé číslo, alebo prázdny.")
+        else:
+            max_value = int(max_raw)
+    if errors:
+        return None, errors
+    return {"id": route_id, "name": name or route_id,
+            "departure": departure, "arrival": arrival, "time": time_value,
+            "train": train or None, "weekdays": weekdays,
+            "max": max_value, "enabled": bool(form.get("enabled"))}, []
+
+
+def register_views(app: Flask) -> None:
+    """Routes CRUD, settings, run and history views (Tasks 7 to 9)."""
+
+    @app.route("/routes")
+    @login_required
+    def routes_list():
+        routes, cfg_error = safe_routes(app)
+        cards = []
+        try:
+            for route in routes:
+                planned = route_overview(app, route)
+                cards.append({"route": route, "planned": planned,
+                              "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
+        except ConfigError as exc:
+            cards, cfg_error = [], str(exc)
+        # The run panel is merged into this page, so pass its context too.
+        run_routes = [r for r in routes if r.enabled]
+        ready = person_ok(app)
+        status = dict(app.config["RUNNER"].status())
+        if status.get("owner") and status["owner"] != current_uid():
+            status["label"] = "prebieha nákup iného používateľa"
+            status["foreign"] = True
+        return render_template("routes.html", cards=cards, cfg_error=cfg_error,
+                               routes=run_routes, ready=ready, status=status)
+
+    @app.route("/routes/new", methods=["GET", "POST"])
+    @login_required
+    def route_new():
+        try:
+            cfg = normalized_cfg(app)
+            existing = {r["id"] for r in cfg["routes"]} if cfg.get("routes") else set()
+            if request.method == "POST":
+                parsed, errors = parse_route_form(request.form, existing)
+                if parsed:
+                    def apply(cfg):
+                        if any(r.get("id") == parsed["id"]
+                               for r in cfg.get("routes", [])):
+                            raise _DuplicateRoute
+                        cfg.setdefault("routes", []).append(parsed)
+                    try:
+                        mutate_cfg(app, apply)
+                    except _DuplicateRoute:
+                        return render_template(
+                            "route_form.html",
+                            errors=[f"Trasa s ID '{parsed['id']}' už existuje."],
+                            values=request.form, editing=None)
+                    flash("Trasa pridaná.")
+                    return redirect(url_for("routes_list"))
+                return render_template("route_form.html", errors=errors,
+                                       values=request.form, editing=None)
+            return render_template("route_form.html", errors=[], values={},
+                                   editing=None)
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
+
+    def _find(cfg: dict, rid: str) -> dict:
+        for raw in cfg.get("routes", []):
+            if raw.get("id") == rid:
+                return raw
+        abort(404)
+
+    @app.route("/routes/<rid>/edit", methods=["GET", "POST"])
+    @login_required
+    def route_edit(rid):
+        try:
+            cfg = normalized_cfg(app)
+            raw = _find(cfg, rid)
+            if request.method == "POST":
+                parsed, errors = parse_route_form(request.form, set(), editing_id=rid)
+                if parsed:
+                    mutate_cfg(app, lambda c: _find(c, rid).update(parsed))
+                    flash("Trasa uložená.")
+                    return redirect(url_for("routes_list"))
+                return render_template("route_form.html", errors=errors,
+                                       values=request.form, editing=rid)
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
+        values = dict(raw)
+        values["max"] = "" if raw.get("max") is None else raw["max"]
+        values["train"] = raw.get("train") or ""
+        return render_template("route_form.html", errors=[], values=values,
+                               editing=rid)
+
+    @app.route("/routes/<rid>/delete", methods=["POST"])
+    @login_required
+    def route_delete(rid):
+        def apply(cfg):
+            _find(cfg, rid)
+            cfg["routes"] = [r for r in cfg["routes"] if r["id"] != rid]
+        try:
+            mutate_cfg(app, apply)
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
+        flash("Trasa zmazaná.")
+        return redirect(url_for("routes_list"))
+
+    @app.route("/routes/<rid>/toggle", methods=["POST"])
+    @login_required
+    def route_toggle(rid):
+        def apply(cfg):
+            raw = _find(cfg, rid)
+            raw["enabled"] = not raw.get("enabled", True)
+        try:
+            mutate_cfg(app, apply)
+        except ConfigError as exc:
+            flash(str(exc))
+        return redirect(url_for("routes_list"))
+
+    @app.route("/settings", methods=["GET", "POST"])
+    @login_required
+    def settings():
+        cfg = read_cfg_safe(app)
+        errors: list[str] = []
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            surname = request.form.get("surname", "").strip()
+            email = request.form.get("email", "").strip()
+            train_card = request.form.get("train_card", "").strip()
+            delay_raw = request.form.get("delay", "").strip()
+            for label, value in (("Meno", name), ("Priezvisko", surname),
+                                 ("E-mail", email), ("Číslo registrácie", train_card)):
+                if not value:
+                    errors.append(f"{label} je povinné pole.")
+                elif "#" in value:
+                    errors.append(f"{label}: znak # nie je povolený.")
+            if email and "@" not in email:
+                errors.append("E-mail musí obsahovať @.")
+            try:
+                delay = float(delay_raw)
+                if not 15 <= delay <= 600:
+                    errors.append("Pauza medzi nákupmi musí byť 15 až 600 sekúnd.")
+            except ValueError:
+                errors.append("Pauza musí byť číslo.")
+                delay = None
+            zssk_user = request.form.get("zssk_user", "").strip()
+            zssk_pass = request.form.get("zssk_pass", "")
+            if zssk_pass and not zssk_user:
+                errors.append("K heslu ZSSK konta zadaj aj prihlasovacie meno.")
+            if "\n" in zssk_pass or "\r" in zssk_pass:
+                errors.append("Heslo ZSSK konta nesmie obsahovať nový riadok.")
+            if zssk_user and not zssk_pass and not zssk_bulk.load_credentials(
+                    credentials_path(app, cfg)):
+                errors.append("Zadaj heslo ZSSK konta (zatiaľ nie je uložené).")
+            if not errors:
+                zssk_bulk.save_person(
+                    person_path(app, cfg),
+                    zssk_bulk.Person(name=name, surname=surname,
+                                     email=email, train_card=train_card))
+                if zssk_user:
+                    stored = zssk_bulk.load_credentials(credentials_path(app, cfg))
+                    save_env(credentials_path(app, cfg),
+                             {"ZSSK_USER": zssk_user,
+                              "ZSSK_PASS": zssk_pass or stored[1]})
+                def apply(config):
+                    config["delay"] = delay
+                try:
+                    mutate_cfg(app, apply)
+                except ConfigError as exc:
+                    flash(str(exc))
+                    return redirect(url_for("routes_list"))
+                flash("Nastavenia uložené.")
+                return redirect(url_for("settings"))
+            values = request.form
+        else:
+            try:
+                person = zssk_bulk.load_person(person_path(app, cfg))
+                values = {"name": person.name, "surname": person.surname,
+                          "email": person.email, "train_card": person.train_card}
+            except (OSError, ValueError):
+                values = {}
+            values = dict(values, delay=cfg.get("delay", 45))
+        return render_template("settings.html", errors=errors, values=values,
+                               zssk_user=credentials_state(app, read_cfg_safe(app)))
+
+    DEBUG_NAME_RE = re.compile(r"^debug-[A-Za-z0-9._-]+\.(png|html)$")
+
+    def _run_context(app):
+        routes, cfg_error = safe_routes(app)
+        return [r for r in routes if r.enabled], person_ok(app), cfg_error
+
+    @app.route("/settings/zssk-delete", methods=["POST"])
+    @login_required
+    def zssk_delete():
+        credentials_path(app, read_cfg_safe(app)).unlink(missing_ok=True)
+        flash("Uložené ZSSK prihlásenie odstránené.")
+        return redirect(url_for("settings"))
+
+    @app.route("/run")
+    @login_required
+    def run_page():
+        # The run panel now lives on the main Trasy page; keep /run as a
+        # bookmark that lands on that panel.
+        return redirect(url_for("routes_list") + "#beh")
+
+    def _selected(app):
+        route_id = request.form.get("route", "")
+        routes, ready, cfg_error = _run_context(app)
+        if route_id and not cfg_error:
+            routes = [r for r in safe_routes(app)[0]
+                      if r.id == route_id] or abort(404)
+        return route_id, routes, ready, cfg_error
+
+    @app.route("/run/confirm", methods=["POST"])
+    @login_required
+    def run_confirm():
+        route_id, routes, ready, cfg_error = _selected(app)
+        if cfg_error:
+            flash(cfg_error)
+            return redirect(url_for("routes_list"))
+        if not ready:
+            abort(400)
+        try:
+            preview = [(route, route_overview(app, route)) for route in routes]
+        except ConfigError as exc:
+            flash(str(exc))
+            return redirect(url_for("routes_list"))
+        return render_template("run_confirm.html", preview=preview,
+                               route_id=route_id)
+
+    @app.route("/run/start", methods=["POST"])
+    @login_required
+    def run_start():
+        mode = request.form.get("mode", "dry-run")
+        if mode not in ("dry-run", "confirm"):
+            abort(400)
+        route_id, routes, ready, cfg_error = _selected(app)
+        if cfg_error:
+            flash(cfg_error)
+            return redirect(url_for("routes_list"))
+        if not ready or not routes:
+            abort(400)
+        etc, state = app.config["ETC_DIR"], app.config["STATE_DIR"]
+        uid = current_uid()
+        argv = list(app.config["BULK_ARGV"]) + [
+            "--config", str(zssk_users.routes_file(etc, uid)),
+            "--person", str(zssk_users.person_file(etc, uid)),
+            "--credentials", str(zssk_users.credentials_file(etc, uid)),
+            "--lock", str(zssk_users.user_state(state, uid) / "run.lock"),
+            "--debug-dir", str(zssk_users.debug_dir(state, uid)),
+            "--profile-dir", str(zssk_users.profile_dir(state, uid)),
+            "--download-dir", str(zssk_users.downloads_dir(state, uid))]
+        if route_id:
+            argv += ["--route", route_id]
+        argv.append("--confirm" if mode == "confirm" else "--dry-run")
+        label = f"{uid}: {'NÁKUP' if mode == 'confirm' else 'test'}"
+        label += f" ({route_id or 'všetky zapnuté trasy'})"
+        try:
+            app.config["RUNNER"].start(argv, label, owner=uid)
+            flash(f"Spustené: {label}")
+        except RunnerBusy:
+            flash("Práve prebieha nákup iného používateľa, skús o chvíľu.")
+        return redirect(url_for("routes_list"))
+
+    @app.route("/run/status")
+    @login_required
+    def run_status():
+        offset = request.args.get("offset", 0, type=int)
+        status = app.config["RUNNER"].status(offset)
+        if status["owner"] and status["owner"] != current_uid():
+            return jsonify({"running": status["running"], "returncode": None,
+                            "label": "", "lines": [], "next_offset": offset,
+                            "owner": status["owner"], "foreign": True})
+        return jsonify(status)
+
+    @app.route("/run/stop", methods=["POST"])
+    @login_required
+    def run_stop():
+        status = app.config["RUNNER"].status()
+        owner = status.get("owner")
+        user = current_user(app)
+        if owner and owner != current_uid() and not (user or {}).get("is_admin"):
+            flash("Beží nákup iného používateľa, nemôžeš ho zastaviť.")
+            return redirect(url_for("routes_list"))
+        app.config["RUNNER"].stop()
+        flash("Beh zastavený.")
+        return redirect(url_for("routes_list"))
+
+    @app.route("/debug/<path:name>")
+    @login_required
+    def debug_file(name):
+        if not DEBUG_NAME_RE.fullmatch(name):
+            abort(404)
+        return send_from_directory(debug_dir(app, read_cfg_safe(app)), name)
+
+    @app.route("/admin/users")
+    @login_required
+    @admin_required
+    def admin_users():
+        store = app.config["USERS"]
+        # A shareable, absolute link WITH the one-time token for every user who
+        # has not set a password yet. This is the single source of the invite
+        # link; the flashes below just point here so the two never diverge.
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        base = f"{proto}://{request.host}"
+        invite_links = {
+            uid: base + url_for("setup_password", uid=uid, token=u["invite_token"])
+            for uid, u in store.users().items()
+            if not u["password_hash"] and u.get("invite_token")
+        }
+        return render_template("admin_users.html", users=store.users(),
+                               me=current_uid(), admin_count=len(store.admins()),
+                               invite_links=invite_links)
+
+    @app.route("/admin/users/add", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_add_user():
+        store = app.config["USERS"]
+        uid = request.form.get("uid", "").strip().lower()
+        is_admin = request.form.get("is_admin") == "on"
+        try:
+            store.add(uid, is_admin=is_admin)
+            flash(f"Používateľ '{uid}' vytvorený. Jednorazový link na nastavenie "
+                  f"hesla nájdeš nižšie v tabuľke (stĺpec Heslo) a pošli mu ho.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<uid>/delete", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_delete_user(uid):
+        store = app.config["USERS"]
+        if uid == current_uid():
+            flash("Nemôžeš zmazať seba samého.")
+            return redirect(url_for("admin_users"))
+        if store.get(uid) and store.get(uid).get("is_admin") and len(store.admins()) <= 1:
+            flash("Nemôžeš zmazať posledného admina.")
+            return redirect(url_for("admin_users"))
+        if store.exists(uid):
+            store.delete(uid)
+            _safe_rmtree(app.config["ETC_DIR"] / "users", uid)
+            _safe_rmtree(app.config["STATE_DIR"] / "users", uid)
+            flash(f"Používateľ '{uid}' zmazaný.")
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<uid>/reset-password", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_reset_password(uid):
+        store = app.config["USERS"]
+        if not store.exists(uid):
+            abort(404)
+        store.clear_password(uid)
+        flash(f"Heslo pre '{uid}' resetnuté. Nový jednorazový link je nižšie "
+              f"v tabuľke (stĺpec Heslo).")
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<uid>/toggle-admin", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_toggle_admin(uid):
+        store = app.config["USERS"]
+        user = store.get(uid)
+        if not user:
+            abort(404)
+        if user.get("is_admin") and len(store.admins()) <= 1:
+            flash("Nemôžeš odobrať práva poslednému adminovi.")
+            return redirect(url_for("admin_users"))
+        store.set_admin(uid, not user.get("is_admin"))
+        return redirect(url_for("admin_users"))
+
+
+if __name__ == "__main__":
+    from zssk_runner import Runner
+
+    application = create_app(
+        Path(os.environ.get("ZSSK_ETC", "/etc/zssk")),
+        Path(os.environ.get("ZSSK_STATE", "/var/lib/zssk")),
+        runner=Runner(),
+    )
+    # The container has one LAN address; nothing forwards this port anywhere.
+    application.run(host=os.environ.get("ZSSK_BIND", "0.0.0.0"), port=8080,
+                    threaded=True)

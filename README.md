@@ -12,11 +12,12 @@ dedicated LXC container. Two tools live here:
 
 ```
 pve  ──►  LXC 121 "zssk" (Debian, 1 GB, nesting=1)
-             ├── /opt/zssk/zssk_bulk.py  bulk buyer (planner + ledger + flow)
-             ├── /opt/zssk/bulk.json     route, time, weekdays, pacing
-             ├── /opt/zssk/tickets.json  ledger of what was bought
-             ├── /opt/zssk/person.txt    passenger data (0600, never in git)
-             └── /opt/zssk/buy.sh        upstream checkout + compatibility patch
+             ├── /opt/zssk/zssk_bulk.py     bulk buyer (planner + ledger + flow)
+             ├── /opt/zssk/zssk_web.py      web UI on port 8080 (LAN only)
+             ├── /etc/zssk/routes.json      routes, times, weekdays, pacing
+             ├── /etc/zssk/person.txt       passenger data (0600, never in git)
+             ├── /var/lib/zssk/ledger.json  ledger of what was bought
+             └── /opt/zssk/buy.sh           upstream checkout + compatibility patch
                      ▲
         zssk-topup.timer (weekly, disabled until you enable it)
 ```
@@ -24,14 +25,25 @@ pve  ──►  LXC 121 "zssk" (Debian, 1 GB, nesting=1)
 ## Bulk buying
 
 ```bash
-pct exec 121 -- nano /opt/zssk/person.txt   # name, surname, email, registration number
-pct exec 121 -- nano /opt/zssk/bulk.json    # route, departure time, weekdays
+pct exec 121 -- nano /etc/zssk/person.txt    # name, surname, email, registration number
+pct exec 121 -- nano /etc/zssk/routes.json   # routes, departure times, weekdays
 
 cd /opt/zssk
-.venv/bin/python zssk_bulk.py --config bulk.json --list      # the plan, no browser
-xvfb-run -a .venv/bin/python zssk_bulk.py --config bulk.json --dry-run
-xvfb-run -a .venv/bin/python zssk_bulk.py --config bulk.json --confirm
+.venv/bin/python zssk_bulk.py --config /etc/zssk/routes.json --list   # the plan, no browser
+xvfb-run -a .venv/bin/python zssk_bulk.py --config /etc/zssk/routes.json --dry-run
+xvfb-run -a .venv/bin/python zssk_bulk.py --config /etc/zssk/routes.json --confirm
 ```
+
+Configuration lives in `/etc/zssk` (`routes.json` and `person.txt`) and state in
+`/var/lib/zssk` (`ledger.json`, `debug/`), so re-running the installer never
+touches either. `/opt/zssk/bulk.json` and `/opt/zssk/person.txt` are symlinks to
+the `/etc/zssk` files, so older commands keep working.
+
+Nothing on the command line is required day to day: a web UI runs on port 8080
+(`http://<ct-ip>:8080`, LAN only). It edits the routes and the passenger data,
+starts a dry run or a purchase and streams its log, and lists the ledger. The
+first visit asks for the one-time setup token that `install.sh` prints at the
+end, and then sets the panel password.
 
 `--list` prints every date it would buy and starts no browser. `--dry-run`
 (the default) walks the entire checkout and stops at the summary without
@@ -42,7 +54,7 @@ Useful flags: `--max N` (buy at most N and stop), `--start DD.MM.YYYY`,
 `--horizon-days N`, `--delay N` (seconds between purchases, default 45),
 `--stop-on-error`, `--profile-dir DIR` (reuse one Firefox profile between runs).
 
-The ledger at `tickets.json` records every purchase, so re-running is safe: it
+The ledger at `/var/lib/zssk/ledger.json` records every purchase, so re-running is safe: it
 buys only the dates that entered the window since last time. That is what the
 installed timer does — once a week, after you enable it:
 
@@ -53,7 +65,8 @@ journalctl -u zssk-topup.service -n 50
 ```
 
 Cancel a ticket you end up not needing at `predaj.zssk.sk/refund`, and delete
-its line from `tickets.json` if you want the tool to buy that date again.
+its line from `/var/lib/zssk/ledger.json` if you want the tool to buy that date
+again (the web UI shows the same ledger under "História").
 
 ## Read this before you rely on it
 
@@ -64,7 +77,7 @@ its line from `tickets.json` if you want the tool to buy that date again.
   checked against the live site (see below) — but the steps after the search
   are still upstream's 2019 ids and are **unverified**. Always do a
   `--stop-before-pay` run first and look at the screenshot it drops in
-  `/opt/zssk/debug-*`.
+  `/var/lib/zssk/debug`.
 * **The site sits behind F5 Shape bot defense** (the `/TSPD/…` script on every
   page). Expect headless Firefox from a datacenter IP to be reset outright; a
   normal-looking run from the LAN (`-F`, non-headless) has a much better

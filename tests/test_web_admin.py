@@ -1,0 +1,119 @@
+import re
+import shutil
+import pytest
+import zssk_web
+from zssk_runner import Runner
+
+CSRF_RE = re.compile(r'name="csrf" value="([0-9a-f]+)"')
+
+
+@pytest.fixture
+def admin(tmp_path):
+    app = zssk_web.create_app(tmp_path / "etc", tmp_path / "state",
+                              runner=Runner(), fail_delay=0)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    c.get("/setup")
+    c.post("/setup", data={"username": "jakub", "password": "tajneheslo1",
+                           "password2": "tajneheslo1"})
+    return app, c, tmp_path
+
+
+def _csrf(c, path="/admin/users"):
+    return CSRF_RE.search(c.get(path).get_data(as_text=True)).group(1)
+
+
+def test_add_user_creates_invite(admin):
+    app, c, tmp_path = admin
+    r = c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    assert r.status_code == 302
+    page = c.get("/admin/users").get_data(as_text=True)
+    assert "peter" in page and "setup-password/peter" in page
+    assert app.config["USERS"].exists("peter") and not app.config["USERS"].has_password("peter")
+
+
+def test_admin_invite_link_carries_working_token(admin):
+    # Regression: the durable invite link on the admin page must carry the
+    # one-time token, and following it must reach the form (200), not 403.
+    # Before the fix the table link was tokenless -> setup_password aborted 403.
+    from urllib.parse import urlsplit
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    page = c.get("/admin/users").get_data(as_text=True)
+    m = re.search(r'href="([^"]*setup-password/peter[^"]*)"', page)
+    assert m, "no setup-password link for peter on the admin page"
+    link = m.group(1).replace("&amp;", "&")
+    assert "token=" in link, "invite link on admin page is missing its one-time token"
+    sp = urlsplit(link)
+    path = sp.path + ("?" + sp.query if sp.query else "")
+    assert c.get(path).status_code == 200
+
+
+def test_setup_password_form_has_pm_fields(admin):
+    # the invited user's set-password page needs a username field (so the PM
+    # associates the new password with the uid) plus new-password on both boxes.
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    tok = app.config["USERS"].invite_token("peter")
+    page = c.get(f"/setup-password/peter?token={tok}").get_data(as_text=True)
+    assert 'autocomplete="username"' in page and 'value="peter"' in page
+    assert page.count('autocomplete="new-password"') >= 2
+
+
+def test_add_rejects_bad_and_duplicate(admin):
+    app, c, tmp_path = admin
+    assert "a-z" in c.post("/admin/users/add", data={"uid": "Zle", "csrf": _csrf(c)},
+                           follow_redirects=True).get_data(as_text=True)
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    assert "existuje" in c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)},
+                                follow_redirects=True).get_data(as_text=True)
+
+
+def test_cannot_delete_self_or_last_admin(admin):
+    app, c, tmp_path = admin
+    out = c.post("/admin/users/jakub/delete", data={"csrf": _csrf(c)},
+                 follow_redirects=True).get_data(as_text=True)
+    assert "seba" in out and app.config["USERS"].exists("jakub")
+
+
+def test_delete_user_removes_dirs(admin):
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    (tmp_path / "etc" / "users" / "peter").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "var" if False else tmp_path / "state" / "users" / "peter").mkdir(parents=True, exist_ok=True)
+    c.post("/admin/users/peter/delete", data={"csrf": _csrf(c)})
+    assert not app.config["USERS"].exists("peter")
+    assert not (tmp_path / "etc" / "users" / "peter").exists()
+    assert not (tmp_path / "state" / "users" / "peter").exists()
+
+
+def test_reset_password_allows_setup_again(admin):
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    app.config["USERS"].set_password("peter", "petrovo1")
+    c.post("/admin/users/peter/reset-password", data={"csrf": _csrf(c)})
+    assert not app.config["USERS"].has_password("peter")
+
+
+def test_toggle_admin_but_not_last(admin):
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    c.post("/admin/users/peter/toggle-admin", data={"csrf": _csrf(c)})
+    assert set(app.config["USERS"].admins()) == {"jakub", "peter"}
+    # removing jakub's admin is allowed (peter is still admin)
+    c.post("/admin/users/jakub/toggle-admin", data={"csrf": _csrf(c)})
+    assert app.config["USERS"].admins() == ["peter"]
+
+
+def test_non_admin_gets_403(admin):
+    app, c, tmp_path = admin
+    c.post("/admin/users/add", data={"uid": "peter", "csrf": _csrf(c)})
+    # setup_password enforces check_invite (Task 5), so the real one-time
+    # token has to travel with the request, same as the link admin_add_user
+    # flashes.
+    invite = app.config["USERS"].invite_token("peter")
+    peter = app.test_client()
+    peter.get(f"/setup-password/peter?token={invite}")
+    peter.post("/setup-password/peter", data={"password": "petrovo11", "password2": "petrovo11",
+                                               "token": invite})
+    assert peter.get("/admin/users").status_code == 403
