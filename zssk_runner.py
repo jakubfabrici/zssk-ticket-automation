@@ -58,6 +58,7 @@ class Runner:
 
     def status(self, offset: int = 0) -> dict:
         with self._lock:
+            self._recover_if_pump_died()
             fresh = self._lines[offset:]
             return {
                 "running": self._proc is not None and self._returncode is None,
@@ -67,6 +68,24 @@ class Runner:
                 "next_offset": offset + len(fresh),
                 "owner": self._owner,
             }
+
+    def _recover_if_pump_died(self) -> None:
+        """Publish the exit code if the pump thread died before doing so.
+
+        Called with the lock held. The pump normally publishes completion
+        after draining the pipe; if it dies on an exception instead, the
+        child is long gone but "running" would stay True forever and every
+        other user would be told a purchase is in progress. Only a dead
+        thread is consulted, so the drain race the pump guards against is
+        untouched.
+        """
+        if self._proc is None or self._returncode is not None:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        code = self._proc.poll()
+        if code is not None:
+            self._returncode = code
 
     @property
     def owner(self) -> str | None:
@@ -93,3 +112,8 @@ class Runner:
             proc.wait(timeout=5)
         if thread is not None:
             thread.join(timeout=5)
+        with self._lock:
+            # A stop must leave the runner free, even when the pump thread
+            # did not get to publish the exit code.
+            if self._returncode is None and proc.returncode is not None:
+                self._returncode = proc.returncode

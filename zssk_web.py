@@ -370,6 +370,40 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
     return app
 
 
+def foreign_view(app: Flask, status: dict, offset: int | None = None) -> dict:
+    """What the current user may know about the runner's state.
+
+    Your own run comes back untouched. Another user's run is reduced to
+    "someone is buying": no label, no log. An admin additionally gets the
+    owner's name and may stop it (the Runner is a single slot shared by
+    everyone, so a stuck or forgotten run would otherwise block all of them).
+
+    Another user's FINISHED run is nobody else's business and reads as idle.
+    Reporting it as "foreign" kept telling everyone else that a purchase was
+    in progress for as long as that user stayed the runner's last owner.
+    """
+    owner = status.get("owner")
+    if not owner or owner == current_uid():
+        status["foreign"] = False
+        status["can_stop"] = bool(status.get("running"))
+        return status
+    # Never advance a stranger's log offset: a client polling through another
+    # user's run must not skip the start of its own next run.
+    if offset is None:
+        offset = status.get("next_offset", 0)
+    if not status.get("running"):
+        return {"running": False, "returncode": None, "label": "",
+                "lines": [], "next_offset": offset, "owner": None,
+                "foreign": False, "can_stop": False}
+    is_admin = bool((current_user(app) or {}).get("is_admin"))
+    return {"running": True, "returncode": None,
+            "label": (f"prebieha nákup používateľa {owner}" if is_admin
+                      else "prebieha nákup iného používateľa"),
+            "lines": [], "next_offset": offset,
+            "owner": owner if is_admin else None,
+            "foreign": True, "can_stop": is_admin}
+
+
 def route_overview(app: Flask, route, today=None):
     """Planned dates for one route: every matching day in the selling window."""
     cfg = read_cfg_safe(app)
@@ -463,10 +497,7 @@ def register_views(app: Flask) -> None:
         # The run panel is merged into this page, so pass its context too.
         run_routes = [r for r in routes if r.enabled]
         ready = person_ok(app)
-        status = dict(app.config["RUNNER"].status())
-        if status.get("owner") and status["owner"] != current_uid():
-            status["label"] = "prebieha nákup iného používateľa"
-            status["foreign"] = True
+        status = foreign_view(app, dict(app.config["RUNNER"].status()))
         return render_template("routes.html", cards=cards, cfg_error=cfg_error,
                                routes=run_routes, ready=ready, status=status)
 
@@ -706,11 +737,9 @@ def register_views(app: Flask) -> None:
     def run_status():
         offset = request.args.get("offset", 0, type=int)
         status = app.config["RUNNER"].status(offset)
-        if status["owner"] and status["owner"] != current_uid():
-            return jsonify({"running": status["running"], "returncode": None,
-                            "label": "", "lines": [], "next_offset": offset,
-                            "owner": status["owner"], "foreign": True})
-        return jsonify(status)
+        # Another user's run never leaks its log or label; only an admin
+        # learns whose run it is, because only an admin may stop it.
+        return jsonify(foreign_view(app, dict(status), offset=offset))
 
     @app.route("/run/stop", methods=["POST"])
     @login_required
@@ -722,7 +751,10 @@ def register_views(app: Flask) -> None:
             flash("Beží nákup iného používateľa, nemôžeš ho zastaviť.")
             return redirect(url_for("routes_list"))
         app.config["RUNNER"].stop()
-        flash("Beh zastavený.")
+        if owner and owner != current_uid():
+            flash(f"Beh používateľa {owner} zastavený.")
+        else:
+            flash("Beh zastavený.")
         return redirect(url_for("routes_list"))
 
     @app.route("/debug/<path:name>")

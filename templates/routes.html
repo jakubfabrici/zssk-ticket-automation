@@ -13,15 +13,18 @@
 </div>
 {% endif %}
 
-<div id="beh" class="statusbox {{ 'st-run' if status.running else '' }}" {{ '' if status.running else 'hidden' }}>
-  <span id="state">{% if status.foreign %}Teraz prebieha nákup iného používateľa, skús o chvíľu.{% elif status.running %}⏳ Pracujem, chvíľu strpenia…{% endif %}</span>
-  {% if status.running and not status.foreign %}
-  <form method="post" action="{{ url_for('run_stop') }}" class="inline" id="stopform">
+<div id="beh" class="statusbox {{ 'st-wait' if status.foreign else ('st-run' if status.running else '') }}" {{ '' if status.running else 'hidden' }}>
+  <span id="state">{% if status.foreign and status.can_stop %}Prebieha nákup používateľa {{ status.owner }}. Ako správca ho môžeš zastaviť.{% elif status.foreign %}Teraz prebieha nákup iného používateľa, skús o chvíľu.{% elif status.running %}⏳ Pracujem, chvíľu strpenia…{% endif %}</span>
+  {# Always in the page: a run that starts after this page loaded still gets
+     its button, the poller only toggles visibility. #}
+  <form method="post" action="{{ url_for('run_stop') }}" class="inline" id="stopform"
+        {{ '' if (status.running and status.can_stop) else 'hidden' }}
+        onsubmit="return !this.dataset.foreign || confirm('Naozaj zastaviť nákup iného používateľa?')"
+        {% if status.foreign and status.can_stop %}data-foreign="1"{% endif %}>
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-    <button type="submit">Zastaviť</button>
+    <button type="submit" id="stopbtn">{{ 'Zastaviť cudzí beh' if (status.foreign and status.can_stop) else 'Zastaviť' }}</button>
   </form>
-  {% endif %}
-  <details><summary>Podrobnosti</summary><pre id="log"></pre></details>
+  <details {{ 'hidden' if status.foreign else '' }} id="logbox"><summary>Podrobnosti</summary><pre id="log"></pre></details>
 </div>
 
 <div class="section-head">
@@ -95,11 +98,24 @@ async function poll() {
   catch (e) { return; }
   if (typeof status.next_offset === 'number') off = status.next_offset;
   const stop = document.getElementById('stopform');
+  const stopBtn = document.getElementById('stopbtn');
+  const logBox = document.getElementById('logbox');
   if (status.foreign) {
-    set('Teraz prebieha nákup iného používateľa, skús o chvíľu.', 'st-wait');
-    if (stop) stop.hidden = true;
+    logBox.hidden = true;
+    if (status.can_stop) {
+      set('Prebieha nákup používateľa ' + status.owner + '. Ako správca ho môžeš zastaviť.', 'st-wait');
+      stop.dataset.foreign = '1';
+      stopBtn.textContent = 'Zastaviť cudzí beh';
+      stop.hidden = !status.running;
+    } else {
+      set('Teraz prebieha nákup iného používateľa, skús o chvíľu.', 'st-wait');
+      stop.hidden = true;
+    }
     return;
   }
+  logBox.hidden = false;
+  delete stop.dataset.foreign;
+  stopBtn.textContent = 'Zastaviť';
   if (status.lines && status.lines.length) {
     const pre = document.getElementById('log');
     pre.textContent += status.lines.join('\n') + '\n';

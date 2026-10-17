@@ -79,3 +79,23 @@ def test_stop_tolerates_already_reaped_process(monkeypatch):
     runner.stop(grace=1)          # must not raise
     monkeypatch.undo()
     runner.stop(grace=2)          # real cleanup so the child does not linger
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_status_recovers_when_the_pump_thread_dies(monkeypatch):
+    """A pump that dies on an exception must not leave "running" stuck on."""
+    def exploding_pump(self, proc):
+        raise RuntimeError("simulated decode error")
+    monkeypatch.setattr(Runner, "_pump", exploding_pump)
+    runner = Runner()
+    runner.start([sys.executable, "-c", "print('bye')"], "crash", owner="januar")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        status = runner.status()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert not status["running"] and status["returncode"] == 0
+    # and the slot is free again for the next run
+    runner.start([sys.executable, "-c", "pass"], "next")
+    drain(runner)
