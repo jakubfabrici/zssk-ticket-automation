@@ -1,8 +1,7 @@
-person.txt
-debug-*
-tickets.json
-bulk.json
-__pycache__/
-*.py[cod]
 .venv/
+__pycache__/
 .pytest_cache/
+person.txt
+routes.json
+tickets.json
+debug-*
