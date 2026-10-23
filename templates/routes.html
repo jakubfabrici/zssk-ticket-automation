@@ -127,6 +127,9 @@ async function poll() {
   } else if (status.returncode === 0) {
     set('✅ Hotovo.', 'st-ok');
     if (stop) stop.hidden = true;
+  } else if (status.returncode === 2) {
+    set('⚠️ ZSSK hlási, že ponuka na tento spoj je už vypredaná. Skús iný vlak alebo iný deň (Podrobnosti ukážu ktoré).', 'st-err');
+    if (stop) stop.hidden = true;
   } else if (status.returncode !== null && status.returncode !== undefined) {
     set('⚠️ Nepodarilo sa. Skús znova, alebo otvor Podrobnosti.', 'st-err');
     if (stop) stop.hidden = true;

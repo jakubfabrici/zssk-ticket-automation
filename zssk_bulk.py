@@ -440,6 +440,16 @@ class AlreadyIssued(RuntimeError):
     Recorded as "exists" so re-runs stop poking the date."""
 
 
+class SoldOut(RuntimeError):
+    """The shop refuses the date: the chosen offer on that train is sold out.
+
+    Observed live 2026-10-23 on Ex 621 17:58: the ticket-choice page comes
+    back with the error box "Zvolená ponuka na vybrané vlakové spojenie je už
+    vypredaná." Not a failure of ours and not worth three minutes of timeouts
+    looking for the personal-data form; recorded as "soldout" and the run
+    moves on to the next date or route."""
+
+
 class StepFailed(RuntimeError):
     """A step could not be completed -- carries the step name for the report."""
 
@@ -685,6 +695,35 @@ def select_connection(driver, departure_time: str, train: str | None = None,
     raise StepFailed("select_connection", f"no result matching {wanted}")
 
 
+def shop_error(driver) -> str:
+    """Text of the shop's red error box ("Veľmi nás to mrzí ..."), or "".
+
+    The box sits in #errorMessageContainer above the content on whatever
+    page the server decided to answer with; after it, the flow cannot go on.
+    """
+    try:
+        for element in driver.find_elements(
+                BY_CSS, "#errorMessageContainer .error-box, .error-box"):
+            if element.is_displayed():
+                text = (element.get_attribute("textContent") or "")
+                text = " ".join(text.split())
+                if text:
+                    return text
+    except WebDriverException:
+        pass
+    return ""
+
+
+def raise_on_shop_error(driver, step: str) -> None:
+    """Turn the shop's error box into the right exception for `step`."""
+    error = shop_error(driver)
+    if not error:
+        return
+    if "vypredan" in error.lower():
+        raise SoldOut(error)
+    raise StepFailed(step, error)
+
+
 def page_error(driver) -> str:
     """Text of the first visible server-side validation error, or ""."""
     try:
@@ -907,10 +946,16 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
             note = wait_text(driver, "pax_filter_result")
             log.info("passenger filter result: %s", note or "(bez textu)")
 
-    click_continue(driver)             # Voľba cestujúcich
-    click_continue(driver)             # Voľba cestovného lístka
-    click_continue(driver)             # Doplnkové služby
-    click_continue(driver)             # Obsah košíka
+    for step in ("passengers",         # Voľba cestujúcich
+                 "offer",              # Voľba cestovného lístka
+                 "extras",             # Doplnkové služby
+                 "cart"):              # Obsah košíka
+        click_continue(driver)
+        # The shop answers a sold-out or otherwise refused offer with its red
+        # error box on the very next page; without this check the flow kept
+        # clicking "Pokračovať" into nothing and failed minutes later at
+        # "email", which said nothing about the real reason.
+        raise_on_shop_error(driver, step)
 
     element = find(driver, "email")
     element.clear()
@@ -1309,6 +1354,15 @@ def main(argv: list[str] | None = None) -> int:
                 results.append((day, "exists", detail))
                 log.info("%s: lístok už existuje, označujem ako pokrytý", day.isoformat())
                 continue
+            except SoldOut as exc:
+                # A definitive answer from the shop, cheap to get: it does not
+                # count towards the consecutive-failure stop, so the other
+                # dates and routes still get their turn.
+                detail = str(exc)[:160]
+                results.append((day, "soldout", detail))
+                log.warning("%s %s: ZSSK hlási vypredané - %s", route.id,
+                            day.isoformat(), detail)
+                continue
             except Exception as exc:
                 step = getattr(exc, "step", type(exc).__name__)
                 detail = str(exc).splitlines()[0][:120]
@@ -1331,7 +1385,12 @@ def main(argv: list[str] | None = None) -> int:
         driver.quit()
 
     print(summarise(results))
-    return 1 if any(status == "failed" for _, status, _ in results) else 0
+    statuses = {status for _, status, _ in results}
+    if "failed" in statuses:
+        return 1
+    # Nothing broke, but the shop refused at least one date as sold out: the
+    # traveller must pick another train or day, so this is not a clean 0.
+    return 2 if "soldout" in statuses else 0
 
 
 if __name__ == "__main__":
