@@ -25,6 +25,7 @@ from flask import (Flask, abort, current_app, jsonify, redirect,
                    url_for, flash)
 
 import zssk_bulk
+import zssk_auto
 import zssk_users
 from zssk_runner import RunnerBusy
 from zssk_users import UserStore
@@ -370,6 +371,152 @@ def create_app(etc_dir: Path, state_dir: Path, runner,
     return app
 
 
+def bulk_argv(app: Flask, uid: str, route_id: str | None, mode: str) -> list[str]:
+    """The zssk_bulk.py command line for one user's run (button or schedule)."""
+    etc, state = app.config["ETC_DIR"], app.config["STATE_DIR"]
+    argv = list(app.config["BULK_ARGV"]) + [
+        "--config", str(zssk_users.routes_file(etc, uid)),
+        "--person", str(zssk_users.person_file(etc, uid)),
+        "--credentials", str(zssk_users.credentials_file(etc, uid)),
+        "--lock", str(zssk_users.user_state(state, uid) / "run.lock"),
+        "--debug-dir", str(zssk_users.debug_dir(state, uid)),
+        "--profile-dir", str(zssk_users.profile_dir(state, uid)),
+        "--download-dir", str(zssk_users.downloads_dir(state, uid))]
+    if route_id:
+        argv += ["--route", route_id]
+    argv.append("--confirm" if mode == "confirm" else "--dry-run")
+    return argv
+
+
+def person_ready(etc_dir: Path, uid: str) -> bool:
+    try:
+        person = zssk_bulk.load_person(zssk_users.person_file(etc_dir, uid))
+    except (OSError, ValueError):
+        return False
+    return "example.com" not in person.email
+
+
+def _user_routes(etc_dir: Path, uid: str) -> list:
+    path = zssk_users.routes_file(etc_dir, uid)
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        return zssk_bulk.load_routes(cfg)
+    except (OSError, ValueError, SystemExit):
+        return []
+
+
+def auto_tick(app: Flask, now: dt.datetime | None = None) -> str | None:
+    """Start at most one due weekly purchase. Returns "uid/route" or None.
+
+    Runs from the scheduler thread once a minute. The Runner is the one slot
+    every purchase shares, so a due run simply waits while anything else is
+    running and starts on a later tick. The attempt is recorded before the
+    run starts, so a run that cannot even start is never retried in a loop.
+    """
+    runner = app.config["RUNNER"]
+    if runner.status()["running"]:
+        return None
+    now = now or zssk_auto.now_local()
+    etc, state = app.config["ETC_DIR"], app.config["STATE_DIR"]
+    for uid in sorted(app.config["USERS"].users()):
+        if not zssk_users.valid_uid(uid):
+            continue
+        user_state = zssk_users.user_state(state, uid)
+        saved = zssk_auto.load_state(user_state)
+        for route in _user_routes(etc, uid):
+            if not (route.enabled and route.auto):
+                continue
+            weekday, hhmm = route.auto
+            entry = saved.get(route.id) or {}
+            if not zssk_auto.is_due(now, weekday, hhmm,
+                                    zssk_auto.parse_ts(route.auto_since),
+                                    zssk_auto.parse_ts(entry.get("last_attempt"))):
+                continue
+            stamp = now.isoformat(timespec="seconds")
+            if not person_ready(etc, uid):
+                zssk_auto.update_state(user_state, route.id, last_attempt=stamp,
+                                       result="skipped",
+                                       summary="chýbajú osobné údaje")
+                continue
+            zssk_auto.update_state(user_state, route.id, last_attempt=stamp,
+                                   result="running", summary="")
+
+            def on_exit(code, lines, _uid=uid, _rid=route.id, _dir=user_state):
+                zssk_auto.log_path(_dir, _rid).write_text(
+                    "\n".join(lines) + "\n", encoding="utf-8")
+                key, _ = zssk_auto.classify(code)
+                zssk_auto.update_state(
+                    _dir, _rid, result=key, returncode=code,
+                    finished=zssk_auto.now_local().isoformat(timespec="seconds"),
+                    summary=zssk_auto.summary_line(lines))
+
+            label = f"{uid}: AUTOMATICKÝ NÁKUP ({route.id})"
+            try:
+                runner.start(bulk_argv(app, uid, route.id, "confirm"), label,
+                             owner=uid, on_exit=on_exit)
+            except RunnerBusy:
+                # Lost the race to a button press: try again next tick.
+                zssk_auto.update_state(user_state, route.id,
+                                       last_attempt=entry.get("last_attempt"),
+                                       result=entry.get("result", ""))
+                return None
+            return f"{uid}/{route.id}"
+    return None
+
+
+def start_scheduler(app: Flask, interval: float = 60.0) -> threading.Thread:
+    """Background thread that calls auto_tick once per `interval` seconds."""
+    import logging
+    import time as _time
+    log = logging.getLogger("zssk.auto")
+
+    def loop():
+        while True:
+            try:
+                started = auto_tick(app)
+                if started:
+                    log.warning("automatický nákup spustený: %s", started)
+            except Exception:
+                log.exception("auto_tick failed")
+            _time.sleep(interval)
+
+    thread = threading.Thread(target=loop, name="zssk-auto", daemon=True)
+    thread.start()
+    return thread
+
+
+def auto_card(app: Flask, uid: str, route) -> dict | None:
+    """What the route card says about its weekly purchase."""
+    if not route.auto:
+        return None
+    weekday, hhmm = route.auto
+    entry = zssk_auto.load_state(
+        zssk_users.user_state(app.config["STATE_DIR"], uid)).get(route.id) or {}
+    last = zssk_auto.parse_ts(entry.get("last_attempt"))
+    result = entry.get("result") or ""
+    if result == "running":
+        status = app.config["RUNNER"].status()
+        live = (status["running"] and status.get("owner") == uid
+                and f"AUTOMATICKÝ NÁKUP ({route.id})" in (status.get("label") or ""))
+        if not live:
+            # The web app restarted mid-run and lost track of its outcome.
+            result = "lost"
+    labels = {"ok": "✅ Hotovo", "failed": "⚠️ Nepodarilo sa",
+              "soldout": "⚠️ Vypredané (niektoré dni)", "stopped": "⏹ Zastavené",
+              "running": "⏳ Beží", "skipped": "⚠️ Preskočené",
+              "lost": "❔ Výsledok neznámy (web sa medzitým reštartoval)"}
+    return {
+        "text": zssk_auto.describe(weekday, hhmm),
+        "next": (zssk_auto.next_slot(zssk_auto.now_local(), weekday, hhmm)
+                 if route.enabled else None),
+        "last": last,
+        "result": labels.get(result, ""),
+        "summary": entry.get("summary") or "",
+        "has_log": zssk_auto.log_path(
+            zssk_users.user_state(app.config["STATE_DIR"], uid), route.id).exists(),
+    }
+
+
 def foreign_view(app: Flask, status: dict, offset: int | None = None) -> dict:
     """What the current user may know about the runner's state.
 
@@ -444,6 +591,9 @@ def parse_route_form(form, existing_ids: set[str],
         weekdays = form.get("weekdays", "").strip()
     max_raw = form.get("max", "").strip()
     start_raw = form.get("start", "").strip()
+    auto_on = bool(form.get("auto"))
+    auto_weekday_raw = form.get("auto_weekday", "0").strip()
+    auto_time = form.get("auto_time", "").strip() or "08:00"
 
     # The id is no longer typed by the user; for a new route it is derived from
     # the name (slug, made unique). Editing keeps the existing id.
@@ -478,13 +628,35 @@ def parse_route_form(form, existing_ids: set[str],
             start_value = zssk_bulk.parse_start_date(start_raw).isoformat()
         except ValueError:
             errors.append("Od dátumu: zadaj dátum, napr. 8.11.2026.")
+    auto_value: dict | None = None
+    if auto_on:
+        if not auto_weekday_raw.isdigit() or not 0 <= int(auto_weekday_raw) <= 6:
+            errors.append("Automatický nákup: vyber deň v týždni.")
+        elif not TIME_RE.fullmatch(auto_time):
+            errors.append("Automatický nákup: čas musí byť v tvare HH:MM.")
+        else:
+            auto_value = {"weekday": int(auto_weekday_raw), "time": auto_time}
     if errors:
         return None, errors
     return {"id": route_id, "name": name or route_id,
             "departure": departure, "arrival": arrival, "time": time_value,
             "train": train or None, "weekdays": weekdays,
-            "start": start_value,
+            "start": start_value, "auto": auto_value,
             "max": max_value, "enabled": bool(form.get("enabled"))}, []
+
+
+def stamp_auto_since(parsed: dict, previous: dict | None) -> dict:
+    """Keep "auto_since" while the schedule is unchanged, restart it when it
+    is switched on or moved, drop it when switched off. A schedule switched
+    on mid-week therefore waits for its next slot instead of buying at once."""
+    previous = previous or {}
+    if not parsed.get("auto"):
+        parsed["auto_since"] = None
+    elif parsed["auto"] == previous.get("auto") and previous.get("auto_since"):
+        parsed["auto_since"] = previous["auto_since"]
+    else:
+        parsed["auto_since"] = zssk_auto.now_local().isoformat(timespec="seconds")
+    return parsed
 
 
 def register_views(app: Flask) -> None:
@@ -499,7 +671,8 @@ def register_views(app: Flask) -> None:
             for route in routes:
                 planned = route_overview(app, route)
                 cards.append({"route": route, "planned": planned,
-                              "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays)})
+                              "weekdays": zssk_bulk.format_weekdays(route.trip.weekdays),
+                              "auto": auto_card(app, current_uid(), route)})
         except ConfigError as exc:
             cards, cfg_error = [], str(exc)
         # The run panel is merged into this page, so pass its context too.
@@ -518,6 +691,7 @@ def register_views(app: Flask) -> None:
             if request.method == "POST":
                 parsed, errors = parse_route_form(request.form, existing)
                 if parsed:
+                    stamp_auto_since(parsed, None)
                     def apply(cfg):
                         if any(r.get("id") == parsed["id"]
                                for r in cfg.get("routes", [])):
@@ -555,7 +729,10 @@ def register_views(app: Flask) -> None:
             if request.method == "POST":
                 parsed, errors = parse_route_form(request.form, set(), editing_id=rid)
                 if parsed:
-                    mutate_cfg(app, lambda c: _find(c, rid).update(parsed))
+                    def apply(c):
+                        target = _find(c, rid)
+                        target.update(stamp_auto_since(parsed, target))
+                    mutate_cfg(app, apply)
                     flash("Trasa uložená.")
                     return redirect(url_for("routes_list"))
                 return render_template("route_form.html", errors=errors,
@@ -567,6 +744,10 @@ def register_views(app: Flask) -> None:
         values["max"] = "" if raw.get("max") is None else raw["max"]
         values["train"] = raw.get("train") or ""
         values["start"] = raw.get("start") or ""
+        auto = raw.get("auto") or {}
+        values["auto"] = "on" if auto else ""
+        values["auto_weekday"] = str(auto.get("weekday", 0))
+        values["auto_time"] = auto.get("time", "08:00")
         return render_template("route_form.html", errors=[], values=values,
                                editing=rid)
 
@@ -719,19 +900,8 @@ def register_views(app: Flask) -> None:
             return redirect(url_for("routes_list"))
         if not ready or not routes:
             abort(400)
-        etc, state = app.config["ETC_DIR"], app.config["STATE_DIR"]
         uid = current_uid()
-        argv = list(app.config["BULK_ARGV"]) + [
-            "--config", str(zssk_users.routes_file(etc, uid)),
-            "--person", str(zssk_users.person_file(etc, uid)),
-            "--credentials", str(zssk_users.credentials_file(etc, uid)),
-            "--lock", str(zssk_users.user_state(state, uid) / "run.lock"),
-            "--debug-dir", str(zssk_users.debug_dir(state, uid)),
-            "--profile-dir", str(zssk_users.profile_dir(state, uid)),
-            "--download-dir", str(zssk_users.downloads_dir(state, uid))]
-        if route_id:
-            argv += ["--route", route_id]
-        argv.append("--confirm" if mode == "confirm" else "--dry-run")
+        argv = bulk_argv(app, uid, route_id, mode)
         label = f"{uid}: {'NÁKUP' if mode == 'confirm' else 'test'}"
         label += f" ({route_id or 'všetky zapnuté trasy'})"
         try:
@@ -765,6 +935,18 @@ def register_views(app: Flask) -> None:
         else:
             flash("Beh zastavený.")
         return redirect(url_for("routes_list"))
+
+    @app.route("/routes/<rid>/auto-log")
+    @login_required
+    def auto_log(rid):
+        if not ID_RE.fullmatch(rid):
+            abort(404)
+        path = zssk_auto.log_path(
+            zssk_users.user_state(app.config["STATE_DIR"], current_uid()), rid)
+        if not path.exists():
+            abort(404)
+        return (path.read_text(encoding="utf-8"), 200,
+                {"Content-Type": "text/plain; charset=utf-8"})
 
     @app.route("/debug/<path:name>")
     @login_required
@@ -860,6 +1042,7 @@ if __name__ == "__main__":
         Path(os.environ.get("ZSSK_STATE", "/var/lib/zssk")),
         runner=Runner(),
     )
+    start_scheduler(application)
     # The container has one LAN address; nothing forwards this port anywhere.
     application.run(host=os.environ.get("ZSSK_BIND", "0.0.0.0"), port=8080,
                     threaded=True)

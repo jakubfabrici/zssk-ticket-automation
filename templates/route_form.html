@@ -33,6 +33,26 @@
   <label>Od dátumu <span class="muted">(nepovinné, prázdne = od dnes)</span>
     <input type="date" name="start" value="{{ values.get('start', '') or '' }}"></label>
 
+  <fieldset class="auto">
+    <legend>Automatický nákup</legend>
+    <label class="check"><input type="checkbox" name="auto"
+        {{ 'checked' if values.get('auto') else '' }}> Skúšať kupovať automaticky každý týždeň</label>
+    <div class="auto-when">
+      <label>Deň
+        <select name="auto_weekday">
+          {% set aw = (values.get('auto_weekday') or '0') | string %}
+          {% for code, day in [('0','pondelok'),('1','utorok'),('2','streda'),('3','štvrtok'),('4','piatok'),('5','sobota'),('6','nedeľa')] %}
+          <option value="{{ code }}" {{ 'selected' if aw == code else '' }}>{{ day }}</option>
+          {% endfor %}
+        </select></label>
+      <label>Čas
+        <input type="time" name="auto_time" value="{{ values.get('auto_time') or '08:00' }}"></label>
+    </div>
+    <p class="muted">V zvolený deň a čas sa spustí skutočný nákup tohto spoja na všetky
+       jeho dni v predaji. Dni, na ktoré už lístok máš, ZSSK odmietne, takže sa nič
+       nekúpi dvakrát. Spoj musí byť zapnutý.</p>
+  </fieldset>
+
   <label class="check"><input type="checkbox" name="enabled"
       {{ 'checked' if values.get('enabled') else '' }}> Trasa je zapnutá</label>
 

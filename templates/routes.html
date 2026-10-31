@@ -52,6 +52,13 @@
      {% if card.route.start %} · od {{ card.route.start.day }}. {{ card.route.start.month }}. {{ card.route.start.year }}{% endif %}</p>
   <p class="counts">○ naplánované: {{ card.planned | length }} dní
      {% if card.planned %}<span class="muted">(najbližší {{ card.planned[0].isoformat() }})</span>{% endif %}</p>
+  {% if card.auto %}
+  <p class="auto-line">🔁 Automaticky {{ card.auto.text }}
+     {% if card.auto.next %}<span class="muted">· ďalší {{ card.auto.next.day }}. {{ card.auto.next.month }}. o {{ card.auto.next.strftime('%H:%M') }}</span>{% else %}<span class="muted">· spoj je vypnutý, nespustí sa</span>{% endif %}
+     {% if card.auto.last %}<br><span class="muted">naposledy {{ card.auto.last.day }}. {{ card.auto.last.month }}. o {{ card.auto.last.strftime('%H:%M') }}: {{ card.auto.result }}{% if card.auto.summary %} ({{ card.auto.summary }}){% endif %}
+       {% if card.auto.has_log %}· <a href="{{ url_for('auto_log', rid=card.route.id) }}">záznam</a>{% endif %}</span>{% endif %}
+  </p>
+  {% endif %}
 
   <div class="card-actions">
     <form method="post" action="{{ url_for('run_confirm') }}" class="inline">

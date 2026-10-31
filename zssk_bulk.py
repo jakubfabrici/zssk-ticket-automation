@@ -214,6 +214,8 @@ class Route:
     max: int | None = None            # buy at most this many dates; None = whole window
     enabled: bool = True
     start: dt.date | None = None      # first date to buy; None = from today
+    auto: tuple[int, str] | None = None  # weekly auto purchase (weekday, HH:MM)
+    auto_since: str | None = None     # when that schedule was switched on (ISO)
 
 
 def parse_start_date(text: str) -> dt.date:
@@ -248,10 +250,17 @@ def _route_from_mapping(route_id: str, raw: dict) -> Route:
             start = parse_start_date(str(raw_start))
         except ValueError as exc:
             raise SystemExit(f"route {route_id!r}: {exc}") from exc
+    try:
+        import zssk_auto
+        auto = zssk_auto.parse_auto(raw.get("auto"))
+    except ValueError as exc:
+        raise SystemExit(f"route {route_id!r}: {exc}") from exc
     return Route(
         id=str(route_id),
         name=str(raw.get("name") or route_id),
         start=start,
+        auto=auto,
+        auto_since=(str(raw["auto_since"]) if raw.get("auto_since") else None),
         trip=Trip(departure=raw["departure"], arrival=raw["arrival"],
                   time=raw["time"], weekdays=weekdays,
                   train=(raw.get("train") or None)),
