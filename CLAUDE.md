@@ -27,18 +27,20 @@ pve sú historické kópie, do repozitára sa zlúčili 2. 10. 2026.
 1. Zmeň kód tu, spusti testy: `python -m pytest -q` vo venv s Flask,
    Selenium a pytest (129 testov, browserové sa preskočia bez Firefoxu).
 2. Commit a push do pracovnej vetvy, PR do `main`.
-3. Po merge aktualizuj kit v kontajneri a preinštaluj:
+3. Nasadenie kódu (bez reinštalácie, zachová `/etc/zssk` aj `/var/lib/zssk`):
+   v LXC 121 naklonuj vetvu do `/opt/zssk-src`, zálohuj súbory z
+   `/opt/zssk` do `/opt/zssk-backup-<čas>`, skopíruj `zssk_*.py`,
+   `templates/*.html` a `static/style.css` a reštartuj `zssk-web`.
+   Predtým over, že nebeží nákup. Pozor: `pgrep -f zssk_bulk` chytí aj
+   vlastný `sh -lc` príkaz, preto kontroluj ukotvene:
 
 ```
-pct exec 121 -- bash -lc 'cd /opt/zssk-kit && git pull --ff-only'
-pct exec 121 -- bash -lc 'bash /opt/zssk-kit/install.sh'
-pct exec 121 -- systemctl status zssk-web --no-pager
+pgrep -x Xvfb; pgrep -x firefox-esr; pgrep -x geckodriver
+pgrep -f '^(/usr/bin/xvfb-run|/opt/zssk/.venv/bin/python /opt/zssk/zssk_bulk)'
 ```
 
-Ak `/opt/zssk-kit` ešte nie je git checkout, nahraď ho klonom tohto
-repozitára (je verejný). `install.sh` je idempotentný: zachová
-`/etc/zssk` aj `/var/lib/zssk`, prepíše len `/opt/zssk`, a reštartuje
-`zssk-web`.
+   Plná reinštalácia cez `install.sh` (z `/opt/zssk-kit`) je potrebná len
+   pri zmene závislostí, systemd jednotiek alebo adresárovej štruktúry.
 
 Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
 
@@ -86,3 +88,7 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
   behu.
 - README ešte opisuje ledger a jednopoužívateľský režim, treba ho
   zaktualizovať.
+- 31. 10. 2026 nasadená vetva `claude/sharp-lamport-jg5pyu` (commit e89642e),
+  záloha predchádzajúcej verzie v `/opt/zssk-backup-20261031-110458`.
+- zssk.fabrici.xyz má v Caddy `import lan_only` (len 192.168.1.0/24, bez
+  VPN). Zmena na `import gate` je Jakubovo rozhodnutie.
