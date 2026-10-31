@@ -25,7 +25,7 @@ pve sú historické kópie, do repozitára sa zlúčili 2. 10. 2026.
 ## Nasadenie zmeny
 
 1. Zmeň kód tu, spusti testy: `python -m pytest -q` vo venv s Flask,
-   Selenium a pytest (129 testov, browserové sa preskočia bez Firefoxu).
+   Selenium a pytest (154 testov, browserové sa preskočia bez Firefoxu).
 2. Commit a push do pracovnej vetvy, PR do `main`.
 3. Nasadenie kódu (bez reinštalácie, zachová `/etc/zssk` aj `/var/lib/zssk`):
    v LXC 121 naklonuj vetvu do `/opt/zssk-src`, zálohuj súbory z
@@ -74,6 +74,13 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
   cestujúceho z konta) → `/payment` → `/summary` (Košík 0,00 €) → Zaplatiť.
 - „Na zvolený čas cesty už existuje vydaný bezplatný lístok“ blokuje celý
   deň, nie len spoj (stav `exists`).
+- „Zvolená ponuka na vybrané vlakové spojenie je už vypredaná.“ (stav
+  `soldout`, beh pokračuje ďalej, kód ukončenia 2).
+- Vlak s povinne miestenkovým vozňom vloží stránku „Rezervácia miesta“
+  (`/position`) s predvoleným „Vybrať konkrétne miesto“. Kód prepne na
+  „Nezáleží / Kdekoľvek“ (`value="NO_PREFERENCE"`), inak ZSSK hlási
+  „Nemáte zvolené požadované miesta vo vozni“. Počet krokov po osobné
+  údaje preto nie je pevný.
 - Pamäť kúpených lístkov (ledger) bola 26. 9. zámerne zrušená: každý beh
   skúša všetky dni, duplikáty odmietne ZSSK.
 - Lístky kúpené cez web sa v apke Ideme vlakom zobrazujú bez riadku ISIC.
@@ -88,7 +95,8 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
   behu.
 - README ešte opisuje ledger a jednopoužívateľský režim, treba ho
   zaktualizovať.
-- 31. 10. 2026 nasadená vetva `claude/sharp-lamport-jg5pyu` (commit e89642e),
-  záloha predchádzajúcej verzie v `/opt/zssk-backup-20261031-110458`.
+- 31. 10. 2026 je v LXC 121 nasadený `main` (merge a7e308d). Zálohy
+  predchádzajúcich verzií: `/opt/zssk-backup-20261031-110458` (pred prvým
+  nasadením z repozitára) a `/opt/zssk-backup-20261031-111633`.
 - zssk.fabrici.xyz má v Caddy `import lan_only` (len 192.168.1.0/24, bez
   VPN). Zmena na `import gate` je Jakubovo rozhodnutie.
