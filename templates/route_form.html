@@ -30,6 +30,9 @@
     {% endfor %}
   </fieldset>
 
+  <label>Od dátumu <span class="muted">(nepovinné, prázdne = od dnes)</span>
+    <input type="date" name="start" value="{{ values.get('start', '') or '' }}"></label>
+
   <label class="check"><input type="checkbox" name="enabled"
       {{ 'checked' if values.get('enabled') else '' }}> Trasa je zapnutá</label>
 

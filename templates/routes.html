@@ -48,7 +48,8 @@
   <p class="meta">{{ card.route.trip.departure }} → {{ card.route.trip.arrival }}
      o {{ card.route.trip.time }}
      {% if card.route.trip.train %} · {{ card.route.trip.train }}{% endif %}
-     {% if card.weekdays %} · {{ card.weekdays }}{% endif %}</p>
+     {% if card.weekdays %} · {{ card.weekdays }}{% endif %}
+     {% if card.route.start %} · od {{ card.route.start.day }}. {{ card.route.start.month }}. {{ card.route.start.year }}{% endif %}</p>
   <p class="counts">○ naplánované: {{ card.planned | length }} dní
      {% if card.planned %}<span class="muted">(najbližší {{ card.planned[0].isoformat() }})</span>{% endif %}</p>
 

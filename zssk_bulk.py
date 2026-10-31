@@ -213,6 +213,20 @@ class Route:
     trip: Trip
     max: int | None = None            # buy at most this many dates; None = whole window
     enabled: bool = True
+    start: dt.date | None = None      # first date to buy; None = from today
+
+
+def parse_start_date(text: str) -> dt.date:
+    """A route's "od dátumu": ISO from the web form's date picker
+    ("2026-11-08"), or the Slovak way of writing it ("8.11.2026", "8. 11. 2026").
+    """
+    text = text.strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return dt.datetime.strptime(text.replace(" ", ""), fmt).date()
+        except ValueError:
+            pass
+    raise ValueError(f"neplatný dátum {text!r} (očakávam 2026-11-08 alebo 8.11.2026)")
 
 
 def _route_from_mapping(route_id: str, raw: dict) -> Route:
@@ -227,9 +241,17 @@ def _route_from_mapping(route_id: str, raw: dict) -> Route:
     if raw_max is not None and (isinstance(raw_max, bool)
                                 or not isinstance(raw_max, int) or raw_max < 1):
         raise SystemExit(f"route {route_id!r}: max must be a positive integer or null")
+    raw_start = raw.get("start")
+    start = None
+    if raw_start:
+        try:
+            start = parse_start_date(str(raw_start))
+        except ValueError as exc:
+            raise SystemExit(f"route {route_id!r}: {exc}") from exc
     return Route(
         id=str(route_id),
         name=str(raw.get("name") or route_id),
+        start=start,
         trip=Trip(departure=raw["departure"], arrival=raw["arrival"],
                   time=raw["time"], weekdays=weekdays,
                   train=(raw.get("train") or None)),
@@ -1212,10 +1234,16 @@ def already_departed(day: dt.date, hhmm: str, now: dt.datetime) -> bool:
 def build_work(routes: list[Route], today: dt.date,
                horizon_days: int, start: dt.date | None,
                cap: int | None) -> list[tuple[Route, dt.date]]:
-    """Everything to buy, grouped by route, capped globally by --max."""
+    """Everything to buy, grouped by route, capped globally by --max.
+
+    A route's own start date and the global --start both apply; the later one
+    wins, so neither can pull a route earlier than its owner asked for.
+    """
     work: list[tuple[Route, dt.date]] = []
     for route in routes:
-        for day in plan_dates(route.trip, today, horizon_days, start, route.max):
+        starts = [d for d in (start, route.start) if d is not None]
+        first = max(starts) if starts else None
+        for day in plan_dates(route.trip, today, horizon_days, first, route.max):
             work.append((route, day))
     return work[:cap] if cap else work
 

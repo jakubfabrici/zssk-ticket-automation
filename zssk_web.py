@@ -409,7 +409,7 @@ def route_overview(app: Flask, route, today=None):
     cfg = read_cfg_safe(app)
     horizon = int(cfg.get("horizon_days", zssk_bulk.BOOKING_HORIZON_DAYS))
     return zssk_bulk.plan_dates(route.trip, today or dt.date.today(),
-                                horizon, None, route.max)
+                                horizon, route.start, route.max)
 
 
 def _slugify(text: str) -> str:
@@ -443,6 +443,7 @@ def parse_route_form(form, existing_ids: set[str],
     else:
         weekdays = form.get("weekdays", "").strip()
     max_raw = form.get("max", "").strip()
+    start_raw = form.get("start", "").strip()
 
     # The id is no longer typed by the user; for a new route it is derived from
     # the name (slug, made unique). Editing keeps the existing id.
@@ -471,11 +472,18 @@ def parse_route_form(form, existing_ids: set[str],
             errors.append("Počet opakovaní musí byť kladné celé číslo, alebo prázdny.")
         else:
             max_value = int(max_raw)
+    start_value: str | None = None
+    if start_raw:
+        try:
+            start_value = zssk_bulk.parse_start_date(start_raw).isoformat()
+        except ValueError:
+            errors.append("Od dátumu: zadaj dátum, napr. 8.11.2026.")
     if errors:
         return None, errors
     return {"id": route_id, "name": name or route_id,
             "departure": departure, "arrival": arrival, "time": time_value,
             "train": train or None, "weekdays": weekdays,
+            "start": start_value,
             "max": max_value, "enabled": bool(form.get("enabled"))}, []
 
 
@@ -558,6 +566,7 @@ def register_views(app: Flask) -> None:
         values = dict(raw)
         values["max"] = "" if raw.get("max") is None else raw["max"]
         values["train"] = raw.get("train") or ""
+        values["start"] = raw.get("start") or ""
         return render_template("route_form.html", errors=[], values=values,
                                editing=rid)
 
