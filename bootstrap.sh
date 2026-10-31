@@ -71,11 +71,11 @@ Container $VMID ($HOSTNAME_, $CT_IP) is ready.
 
 Next, from the Proxmox host:
 
-  pct exec $VMID -- nano /opt/zssk/person.txt        # passenger data
+  the web UI at http://$CT_IP:8080 (or nano /etc/zssk/person.txt)  # passenger data
   pct exec $VMID -- /opt/zssk/buy.sh --stop-before-pay   # dry run
   pct exec $VMID -- /opt/zssk/buy.sh                     # real run
 
 Pull a debug screenshot out of the container with:
 
-  pct pull $VMID /opt/zssk/<debug-file>.png ./<debug-file>.png
+  pct pull $VMID /var/lib/zssk/debug/<debug-file>.png ./<debug-file>.png
 MSG

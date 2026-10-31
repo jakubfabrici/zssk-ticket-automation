@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Prvé spustenie{% endblock %}
+{% block content %}
+<h1>Nastav heslo do rozhrania</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post">
+  <label>Prihlasovacie meno (a-z, 0-9, _, -)
+    <input type="text" name="username" id="username" autocomplete="username"
+           value="{{ (values or {}).get('username', '') }}" required></label>
+  <label>Heslo (aspoň 8 znakov)
+    <input type="password" name="password" autocomplete="new-password" required></label>
+  <label>Heslo znova
+    <input type="password" name="password2" autocomplete="new-password" required></label>
+  {% if need_token %}
+  <label>Inštalačný token (vypísal ho install.sh)
+    <input type="text" name="token" required></label>
+  {% endif %}
+  <button type="submit">Uložiť a prihlásiť</button>
+</form>
+{% endblock %}
