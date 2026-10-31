@@ -921,6 +921,104 @@ def dump_state(driver, tag: str, directory: Path) -> Path | None:
     return base
 
 
+PERSONAL_PAGE_CSS = "input[id*='connectionPersonal']"
+NO_PREFERENCE_CSS = "input[type='radio'][value='NO_PREFERENCE']"
+MAX_CHECKOUT_PAGES = 7
+
+
+def _page_name(driver) -> str:
+    """Short name of the current checkout page for error reports: the URL's
+    last path segment ("position", "offer", "cart"), else its title."""
+    try:
+        from urllib.parse import urlparse
+        path = urlparse(driver.current_url).path.rstrip("/")
+        name = path.rsplit("/", 1)[-1].removesuffix(".html")
+        if name:
+            return name
+        return (driver.title or "page").strip()[:40]
+    except WebDriverException:
+        return "page"
+
+
+def _on_personal_page(driver) -> bool:
+    try:
+        return any(e.is_displayed()
+                   for e in driver.find_elements(BY_CSS, PERSONAL_PAGE_CSS))
+    except WebDriverException:
+        return False
+
+
+def prefer_any_seat(driver, timeout: float = 10.0) -> bool:
+    """On "Rezervácia miesta" pick "Nezáleží / Kdekoľvek" for every segment.
+
+    Observed live 2026-10-31 on Ex 618 12:53 for 3. 12.: the train's wagon is
+    "povinne miestenkový", so the checkout inserts a seat page whose
+    preselected option is "Vybrať konkrétne miesto". Continuing from there
+    without clicking a seat in the wagon plan gets "Nemáte zvolené požadované
+    miesta vo vozni". With "Nezáleží" the shop assigns any free seat itself.
+    Each pick re-renders the form over AJAX, so the radios are found afresh
+    every round. Returns True when anything was switched.
+    """
+    changed = False
+    for _ in range(4):                       # one round per train segment
+        try:
+            pending = [r for r in driver.find_elements(BY_CSS, NO_PREFERENCE_CSS)
+                       if not r.is_selected()]
+        except WebDriverException:
+            return changed
+        if not pending:
+            return changed
+        radio = pending[0]
+        before = _page_fingerprint(driver)
+        try:
+            radio_id = radio.get_attribute("id") or ""
+            labels = [l for l in driver.find_elements(
+                          BY_CSS, f"label[for='{radio_id}']") if l.is_displayed()]
+            if labels:
+                labels[0].click()
+            else:
+                driver.execute_script("arguments[0].click();", radio)
+        except WebDriverException:
+            driver.execute_script("arguments[0].click();", radio)
+        log.info("výber miesta: Nezáleží / Kdekoľvek")
+        changed = True
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if _page_fingerprint(driver) != before:
+                break
+            try:
+                if radio.is_selected():
+                    break
+            except WebDriverException:
+                break                        # re-rendered: the old node is stale
+            time.sleep(0.3)
+    return changed
+
+
+def advance_to_personal(driver) -> None:
+    """Click "Pokračovať" through the checkout until the personal-data page.
+
+    The number of pages in between is not fixed: the usual four (Voľba
+    cestujúcich, Voľba cestovného lístka, Doplnkové služby, Obsah košíka)
+    grow by "Rezervácia miesta" on a train with compulsory seat reservation.
+    A fixed count of four clicks left the flow stranded one page short.
+    """
+    for _ in range(MAX_CHECKOUT_PAGES):
+        if _on_personal_page(driver):
+            return
+        prefer_any_seat(driver)
+        step = _page_name(driver)
+        click_continue(driver)
+        # The shop answers a sold-out or otherwise refused step with its red
+        # error box on the very next page; without this check the flow kept
+        # clicking "Pokračovať" into nothing and failed minutes later at
+        # "email", which said nothing about the real reason.
+        raise_on_shop_error(driver, step)
+    if not _on_personal_page(driver):
+        raise StepFailed("personal", f"stránka s osobnými údajmi sa neobjavila "
+                                     f"ani po {MAX_CHECKOUT_PAGES} krokoch")
+
+
 def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
             dry_run: bool = True, discount_id: str | None = None) -> str:
     """Walk the checkout for one date. Returns "bought" or "dry-run".
@@ -968,16 +1066,7 @@ def buy_one(driver, trip: Trip, day: dt.date, person: Person, url: str,
             note = wait_text(driver, "pax_filter_result")
             log.info("passenger filter result: %s", note or "(bez textu)")
 
-    for step in ("passengers",         # Voľba cestujúcich
-                 "offer",              # Voľba cestovného lístka
-                 "extras",             # Doplnkové služby
-                 "cart"):              # Obsah košíka
-        click_continue(driver)
-        # The shop answers a sold-out or otherwise refused offer with its red
-        # error box on the very next page; without this check the flow kept
-        # clicking "Pokračovať" into nothing and failed minutes later at
-        # "email", which said nothing about the real reason.
-        raise_on_shop_error(driver, step)
+    advance_to_personal(driver)
 
     element = find(driver, "email")
     element.clear()
