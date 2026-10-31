@@ -84,7 +84,7 @@ def test_stop_tolerates_already_reaped_process(monkeypatch):
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_status_recovers_when_the_pump_thread_dies(monkeypatch):
     """A pump that dies on an exception must not leave "running" stuck on."""
-    def exploding_pump(self, proc):
+    def exploding_pump(self, proc, on_exit=None):
         raise RuntimeError("simulated decode error")
     monkeypatch.setattr(Runner, "_pump", exploding_pump)
     runner = Runner()

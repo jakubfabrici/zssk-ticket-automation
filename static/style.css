@@ -215,3 +215,7 @@ button.buy { font-size: 1.05rem; padding: .6rem 1.5rem; }
 details.more { display: inline-block; margin-left: .2rem; }
 details.more > summary { display: inline; color: var(--muted); }
 details.more .card-actions { margin-top: .5rem; }
+
+fieldset.auto { border: 1px solid var(--border); border-radius: 10px; padding: .6rem .9rem; margin: .8rem 0; }
+fieldset.auto .auto-when { display: flex; gap: 1rem; flex-wrap: wrap; }
+.auto-line { margin: .3rem 0 .6rem; }

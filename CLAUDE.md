@@ -25,7 +25,7 @@ pve sú historické kópie, do repozitára sa zlúčili 2. 10. 2026.
 ## Nasadenie zmeny
 
 1. Zmeň kód tu, spusti testy: `python -m pytest -q` vo venv s Flask,
-   Selenium a pytest (154 testov, browserové sa preskočia bez Firefoxu).
+   Selenium a pytest (165 testov, browserové sa preskočia bez Firefoxu).
 2. Commit a push do pracovnej vetvy, PR do `main`.
 3. Nasadenie kódu (bez reinštalácie, zachová `/etc/zssk` aj `/var/lib/zssk`):
    v LXC 121 naklonuj vetvu do `/opt/zssk-src`, zálohuj súbory z
@@ -47,9 +47,12 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
 ## Pevné pravidlá (Jakubove pokyny)
 
 - Nikdy nekupuj lístky za neho: žiadne `--confirm`, žiadne klikanie na
-  „Kúpiť“, timer ostáva vypnutý. Lístky si kupuje sám vo webovom UI.
-  Smieš len opravovať a diagnostikovať. Skúšobný beh (`--dry-run`) proti
-  živému e-shopu len na jeho výslovnú žiadosť a striedmo.
+  „Kúpiť“, timer `zssk-topup` ostáva vypnutý. Lístky si kupuje sám vo
+  webovom UI. Smieš len opravovať a diagnostikovať. Skúšobný beh
+  (`--dry-run`) proti živému e-shopu len na jeho výslovnú žiadosť a striedmo.
+- Týždenný automatický nákup pri spoji (`"auto"` v routes.json) zapína a
+  vypína výhradne používateľ vo formulári spoja. Nikdy ho nezapínaj ani
+  needituj `auto` v jeho routes.json sám.
 - Heslo do ZSSK konta nikdy nepýtaj a nevkladaj do chatu. Zadáva ho sám
   v Nastaveniach UI, ukladá sa do `credentials.env` (0600).
 - Osobné údaje (meno, e-mail, číslo registrácie, číslo konta) nepatria do
@@ -60,6 +63,23 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
   F5/Shape bot ochrana už raz na ~20 minút zablokovala domácu verejnú IP
   (TLS reset, HTTP 000). Firefox cez `xvfb-run`, nie headless.
 - Bez dohody nemerguj a nepushuj do `main`.
+
+## Automatický nákup (od 31. 10. 2026)
+
+- Spoj môže mať `"auto": {"weekday": 0, "time": "08:00"}` (0 = pondelok,
+  čas je Europe/Bratislava) a `"auto_since"` (kedy bol zapnutý alebo
+  zmenený, aby sa po zapnutí v strede týždňa čakalo na najbližší termín).
+- Plánovač je vlákno vo `zssk-web` (`start_scheduler`, `auto_tick` každú
+  minútu). Spúšťa skutočný nákup `--confirm --route <id>` cez ten istý
+  jednomiestny Runner ako tlačidlá, takže čaká, kým beží iný nákup, a správca
+  ho vidí a môže zastaviť ako každý iný beh.
+- Zmeškaný termín (web bol dole, bežal iný nákup) sa dobehne raz, hneď ako
+  sa dá. Spoj musí byť zapnutý a osobné údaje vyplnené, inak sa zapíše
+  „preskočené“.
+- Stav a výsledok: `/var/lib/zssk/users/<uid>/auto.json`, posledný záznam
+  behu `auto-<route>.log` (v UI odkaz „záznam“ na karte spoja).
+- Kontajner beží v UTC. `zssk_bulk` počíta „dnes“ a „vlak už odišiel“ v
+  čase kontajnera, plánovač v Europe/Bratislava.
 
 ## Čo o e-shope platí (overené na živej stránke, september 2026)
 

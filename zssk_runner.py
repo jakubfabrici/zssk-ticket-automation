@@ -28,7 +28,10 @@ class Runner:
         self._returncode: int | None = None
         self._owner: str | None = None
 
-    def start(self, argv: list[str], label: str, owner: str | None = None) -> None:
+    def start(self, argv: list[str], label: str, owner: str | None = None,
+              on_exit=None) -> None:
+        """Start `argv`. `on_exit(returncode, lines)` runs once the child is
+        gone and its output drained (from the pump thread)."""
         with self._lock:
             if self._proc is not None and self._returncode is None:
                 raise RunnerBusy(self._label)
@@ -41,10 +44,11 @@ class Runner:
             self._owner = owner
             self._returncode = None
             self._thread = threading.Thread(target=self._pump,
-                                            args=(self._proc,), daemon=True)
+                                            args=(self._proc, on_exit),
+                                            daemon=True)
             self._thread.start()
 
-    def _pump(self, proc: subprocess.Popen) -> None:
+    def _pump(self, proc: subprocess.Popen, on_exit=None) -> None:
         # Completion is published HERE, after the pipe is drained -- never read
         # from poll() in status(), or a fast-exiting child races its own tail:
         # poll() says finished while the last lines are still in the pipe.
@@ -55,6 +59,13 @@ class Runner:
         code = proc.wait()
         with self._lock:
             self._returncode = code
+            lines = list(self._lines)
+        if on_exit is not None:
+            try:
+                on_exit(code, lines)
+            except Exception:  # a bookkeeping error must not hide the result
+                import logging
+                logging.getLogger("zssk.runner").exception("on_exit failed")
 
     def status(self, offset: int = 0) -> dict:
         with self._lock:
