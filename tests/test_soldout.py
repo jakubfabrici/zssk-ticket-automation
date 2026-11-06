@@ -106,3 +106,21 @@ def test_real_failures_still_stop_after_three(tmp_path, monkeypatch, capsys):
 def test_clean_run_still_exits_zero(tmp_path, monkeypatch):
     code, calls = _run(tmp_path, monkeypatch, ["dry-run", "dry-run"])
     assert code == 0 and len(calls) == 2
+
+
+def test_dates_not_on_sale_yet_skip_the_rest_of_the_route(tmp_path, monkeypatch, capsys):
+    nosale = zssk_bulk.NotOnSaleYet("Veľmi nás to mrzí Na tento dátum sme nenašli "
+                                    "žiadne spojenia")
+    code, calls = _run(tmp_path, monkeypatch, ["dry-run", nosale, "dry-run", "dry-run"])
+    out = capsys.readouterr().out
+    assert len(calls) == 2                 # later dates were not asked for at all
+    assert "notyet: 3" in out and "dry-run: 1" in out
+    assert code == 0                       # nothing broke
+
+
+def test_select_connection_recognises_no_connections(monkeypatch):
+    monkeypatch.setattr(zssk_bulk.time, "sleep", lambda s: None)
+    driver = _Driver([_Element("Veľmi nás to mrzí Na tento dátum sme nenašli "
+                               "žiadne spojenia")])
+    with pytest.raises(zssk_bulk.NotOnSaleYet):
+        zssk_bulk.select_connection(driver, "12:53", "Ex 618", timeout=0)
