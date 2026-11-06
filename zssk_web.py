@@ -426,9 +426,9 @@ def auto_tick(app: Flask, now: dt.datetime | None = None) -> str | None:
         for route in _user_routes(etc, uid):
             if not (route.enabled and route.auto):
                 continue
-            weekday, hhmm = route.auto
+            weekdays, hhmm = route.auto
             entry = saved.get(route.id) or {}
-            if not zssk_auto.is_due(now, weekday, hhmm,
+            if not zssk_auto.is_due(now, weekdays, hhmm,
                                     zssk_auto.parse_ts(route.auto_since),
                                     zssk_auto.parse_ts(entry.get("last_attempt"))):
                 continue
@@ -489,7 +489,7 @@ def auto_card(app: Flask, uid: str, route) -> dict | None:
     """What the route card says about its weekly purchase."""
     if not route.auto:
         return None
-    weekday, hhmm = route.auto
+    weekdays, hhmm = route.auto
     entry = zssk_auto.load_state(
         zssk_users.user_state(app.config["STATE_DIR"], uid)).get(route.id) or {}
     last = zssk_auto.parse_ts(entry.get("last_attempt"))
@@ -506,8 +506,8 @@ def auto_card(app: Flask, uid: str, route) -> dict | None:
               "running": "⏳ Beží", "skipped": "⚠️ Preskočené",
               "lost": "❔ Výsledok neznámy (web sa medzitým reštartoval)"}
     return {
-        "text": zssk_auto.describe(weekday, hhmm),
-        "next": (zssk_auto.next_slot(zssk_auto.now_local(), weekday, hhmm)
+        "text": zssk_auto.describe(weekdays, hhmm),
+        "next": (zssk_auto.next_slot(zssk_auto.now_local(), weekdays, hhmm)
                  if route.enabled else None),
         "last": last,
         "result": labels.get(result, ""),
@@ -592,7 +592,11 @@ def parse_route_form(form, existing_ids: set[str],
     max_raw = form.get("max", "").strip()
     start_raw = form.get("start", "").strip()
     auto_on = bool(form.get("auto"))
-    auto_weekday_raw = form.get("auto_weekday", "0").strip()
+    if hasattr(form, "getlist"):
+        auto_days_raw = [d.strip() for d in form.getlist("auto_weekdays") if d.strip()]
+    else:
+        auto_days_raw = [d.strip() for d in str(form.get("auto_weekdays", "")).split(",")
+                         if d.strip()]
     auto_time = form.get("auto_time", "").strip() or "08:00"
 
     # The id is no longer typed by the user; for a new route it is derived from
@@ -630,12 +634,14 @@ def parse_route_form(form, existing_ids: set[str],
             errors.append("Od dátumu: zadaj dátum, napr. 8.11.2026.")
     auto_value: dict | None = None
     if auto_on:
-        if not auto_weekday_raw.isdigit() or not 0 <= int(auto_weekday_raw) <= 6:
-            errors.append("Automatický nákup: vyber deň v týždni.")
+        days = sorted({int(d) for d in auto_days_raw
+                       if d.isdigit() and 0 <= int(d) <= 6})
+        if not days or len(days) != len(set(auto_days_raw)):
+            errors.append("Automatický nákup: vyber aspoň jeden deň v týždni.")
         elif not TIME_RE.fullmatch(auto_time):
             errors.append("Automatický nákup: čas musí byť v tvare HH:MM.")
         else:
-            auto_value = {"weekday": int(auto_weekday_raw), "time": auto_time}
+            auto_value = {"weekdays": days, "time": auto_time}
     if errors:
         return None, errors
     return {"id": route_id, "name": name or route_id,
@@ -645,6 +651,14 @@ def parse_route_form(form, existing_ids: set[str],
             "max": max_value, "enabled": bool(form.get("enabled"))}, []
 
 
+def _same_auto(a, b) -> bool:
+    """Equal schedules, whether stored in the old single-day or new form."""
+    try:
+        return zssk_auto.parse_auto(a) == zssk_auto.parse_auto(b)
+    except ValueError:
+        return False
+
+
 def stamp_auto_since(parsed: dict, previous: dict | None) -> dict:
     """Keep "auto_since" while the schedule is unchanged, restart it when it
     is switched on or moved, drop it when switched off. A schedule switched
@@ -652,7 +666,7 @@ def stamp_auto_since(parsed: dict, previous: dict | None) -> dict:
     previous = previous or {}
     if not parsed.get("auto"):
         parsed["auto_since"] = None
-    elif parsed["auto"] == previous.get("auto") and previous.get("auto_since"):
+    elif _same_auto(parsed["auto"], previous.get("auto")) and previous.get("auto_since"):
         parsed["auto_since"] = previous["auto_since"]
     else:
         parsed["auto_since"] = zssk_auto.now_local().isoformat(timespec="seconds")
@@ -746,7 +760,11 @@ def register_views(app: Flask) -> None:
         values["start"] = raw.get("start") or ""
         auto = raw.get("auto") or {}
         values["auto"] = "on" if auto else ""
-        values["auto_weekday"] = str(auto.get("weekday", 0))
+        try:
+            saved_auto = zssk_auto.parse_auto(auto)
+        except ValueError:
+            saved_auto = None
+        values["auto_weekdays"] = ",".join(str(d) for d in (saved_auto[0] if saved_auto else (0,)))
         values["auto_time"] = auto.get("time", "08:00")
         return render_template("route_form.html", errors=[], values=values,
                                editing=rid)

@@ -25,7 +25,7 @@ pve sú historické kópie, do repozitára sa zlúčili 2. 10. 2026.
 ## Nasadenie zmeny
 
 1. Zmeň kód tu, spusti testy: `python -m pytest -q` vo venv s Flask,
-   Selenium a pytest (165 testov, browserové sa preskočia bez Firefoxu).
+   Selenium a pytest (169 testov, browserové sa preskočia bez Firefoxu).
 2. Commit a push do pracovnej vetvy, PR do `main`.
 3. Nasadenie kódu (bez reinštalácie, zachová `/etc/zssk` aj `/var/lib/zssk`):
    v LXC 121 naklonuj vetvu do `/opt/zssk-src`, zálohuj súbory z
@@ -66,8 +66,8 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
 
 ## Automatický nákup (od 31. 10. 2026)
 
-- Spoj môže mať `"auto": {"weekday": 0, "time": "08:00"}` (0 = pondelok,
-  čas je Europe/Bratislava) a `"auto_since"` (kedy bol zapnutý alebo
+- Spoj môže mať `"auto": {"weekdays": [0, 3], "time": "08:00"}` (0 = pondelok,
+  čas je Europe/Bratislava; starší tvar `"weekday": 0` sa stále načíta) a `"auto_since"` (kedy bol zapnutý alebo
   zmenený, aby sa po zapnutí v strede týždňa čakalo na najbližší termín).
 - Plánovač je vlákno vo `zssk-web` (`start_scheduler`, `auto_tick` každú
   minútu). Spúšťa skutočný nákup `--confirm --route <id>` cez ten istý
