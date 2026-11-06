@@ -481,6 +481,16 @@ class SoldOut(RuntimeError):
     moves on to the next date or route."""
 
 
+class NotOnSaleYet(RuntimeError):
+    """The search finds no connections at all for the date.
+
+    Observed live 2026-11-02 for every date from 13. 12. 2026: the new
+    timetable starts that day and the e-shop answered "Na tento dátum sme
+    nenašli žiadne spojenia" until it loads it. Later dates of the same
+    route are then skipped without asking the site; a later run tries again.
+    """
+
+
 class StepFailed(RuntimeError):
     """A step could not be completed -- carries the step name for the report."""
 
@@ -721,6 +731,9 @@ def select_connection(driver, departure_time: str, train: str | None = None,
         except WebDriverException:
             pass
         time.sleep(0.4)
+    error = shop_error(driver)
+    if "nenašli žiadne spojenia" in error:
+        raise NotOnSaleYet(error)
     wanted = (f"train {train!r} or time {departure_time}" if train
               else f"time {departure_time}")
     raise StepFailed("select_connection", f"no result matching {wanted}")
@@ -1465,7 +1478,11 @@ def main(argv: list[str] | None = None) -> int:
                     "refusing to buy as a guest (the app delivery would be "
                     f"silently lost): {detail}")
 
+        not_on_sale: dict[str, dt.date] = {}
         for index, (route, day) in enumerate(work):
+            if route.id in not_on_sale and day > not_on_sale[route.id]:
+                results.append((day, "notyet", "e-shop tento deň ešte nepredáva"))
+                continue
             if index:
                 log.info("waiting %.0fs before the next purchase", settings["delay"])
                 time.sleep(settings["delay"])
@@ -1479,6 +1496,13 @@ def main(argv: list[str] | None = None) -> int:
                 detail = str(exc)[:120]
                 results.append((day, "exists", detail))
                 log.info("%s: lístok už existuje, označujem ako pokrytý", day.isoformat())
+                continue
+            except NotOnSaleYet as exc:
+                not_on_sale[route.id] = day
+                results.append((day, "notyet", str(exc)[:160]))
+                log.warning("%s %s: e-shop ešte nepredáva (nový cestovný poriadok?)"
+                            " - ďalšie dni tohto spoja preskakujem", route.id,
+                            day.isoformat())
                 continue
             except SoldOut as exc:
                 # A definitive answer from the shop, cheap to get: it does not

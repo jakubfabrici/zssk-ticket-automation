@@ -25,7 +25,7 @@ pve sú historické kópie, do repozitára sa zlúčili 2. 10. 2026.
 ## Nasadenie zmeny
 
 1. Zmeň kód tu, spusti testy: `python -m pytest -q` vo venv s Flask,
-   Selenium a pytest (165 testov, browserové sa preskočia bez Firefoxu).
+   Selenium a pytest (171 testov, browserové sa preskočia bez Firefoxu).
 2. Commit a push do pracovnej vetvy, PR do `main`.
 3. Nasadenie kódu (bez reinštalácie, zachová `/etc/zssk` aj `/var/lib/zssk`):
    v LXC 121 naklonuj vetvu do `/opt/zssk-src`, zálohuj súbory z
@@ -66,8 +66,8 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
 
 ## Automatický nákup (od 31. 10. 2026)
 
-- Spoj môže mať `"auto": {"weekday": 0, "time": "08:00"}` (0 = pondelok,
-  čas je Europe/Bratislava) a `"auto_since"` (kedy bol zapnutý alebo
+- Spoj môže mať `"auto": {"weekdays": [0, 3], "time": "08:00"}` (0 = pondelok,
+  čas je Europe/Bratislava; starší tvar `"weekday": 0` sa stále načíta) a `"auto_since"` (kedy bol zapnutý alebo
   zmenený, aby sa po zapnutí v strede týždňa čakalo na najbližší termín).
 - Plánovač je vlákno vo `zssk-web` (`start_scheduler`, `auto_tick` každú
   minútu). Spúšťa skutočný nákup `--confirm --route <id>` cez ten istý
@@ -96,6 +96,9 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
   deň, nie len spoj (stav `exists`).
 - „Zvolená ponuka na vybrané vlakové spojenie je už vypredaná.“ (stav
   `soldout`, beh pokračuje ďalej, kód ukončenia 2).
+- „Na tento dátum sme nenašli žiadne spojenia“ znamená, že e-shop deň ešte
+  nepredáva (napr. od 13. 12. 2026 nový cestovný poriadok). Stav `notyet`,
+  ďalšie dni toho spoja sa v behu preskočia bez dopytu na e-shop, nie je to chyba.
 - Vlak s povinne miestenkovým vozňom vloží stránku „Rezervácia miesta“
   (`/position`) s predvoleným „Vybrať konkrétne miesto“. Kód prepne na
   „Nezáleží / Kdekoľvek“ (`value="NO_PREFERENCE"`), inak ZSSK hlási

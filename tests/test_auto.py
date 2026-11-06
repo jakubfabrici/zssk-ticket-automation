@@ -24,9 +24,11 @@ def at(y, m, d, hh=0, mm=0):
 
 def test_parse_auto_validates():
     assert parse_auto(None) is None
-    assert parse_auto({"weekday": 0, "time": "08:00"}) == (0, "08:00")
-    for bad in ({"weekday": 7, "time": "08:00"}, {"weekday": 0, "time": "8"},
-                {"weekday": True, "time": "08:00"}, "pondelok"):
+    assert parse_auto({"weekday": 0, "time": "08:00"}) == ((0,), "08:00")   # old form
+    assert parse_auto({"weekdays": [3, 0, 3], "time": "08:00"}) == ((0, 3), "08:00")
+    for bad in ({"weekday": 7, "time": "08:00"}, {"weekdays": [0], "time": "8"},
+                {"weekdays": [True], "time": "08:00"}, {"weekdays": [], "time": "08:00"},
+                "pondelok"):
         with pytest.raises(ValueError):
             parse_auto(bad)
 
@@ -102,7 +104,7 @@ def _csrf(client, path):
 
 FORM = {"name": "Ke-SNV", "departure": "Košice", "arrival": "Spišská Nová Ves",
         "time": "12:53", "train": "Ex 618", "weekdays": "stv", "max": "",
-        "enabled": "on", "auto": "on", "auto_weekday": "0", "auto_time": "08:00"}
+        "enabled": "on", "auto": "on", "auto_weekdays": ["0"], "auto_time": "08:00"}
 
 
 def _routes(tmp_path):
@@ -124,7 +126,7 @@ def test_form_saves_the_schedule_and_keeps_since_while_unchanged(env):
     assert 'name="auto"' in client.get("/routes/new").get_data(as_text=True)
     client.post("/routes/new", data={**FORM, "csrf": _csrf(client, "/routes/new")})
     route = _routes(tmp_path)[0]
-    assert route["auto"] == {"weekday": 0, "time": "08:00"}
+    assert route["auto"] == {"weekdays": [0], "time": "08:00"}
     since = route["auto_since"]
     assert since
 
@@ -135,8 +137,8 @@ def test_form_saves_the_schedule_and_keeps_since_while_unchanged(env):
     client.post(edit, data={**FORM, "name": "Ke-SNV 2", "csrf": _csrf(client, edit)})
     assert _routes(tmp_path)[0]["auto_since"] == since          # unchanged schedule
 
-    client.post(edit, data={**FORM, "auto_weekday": "1", "csrf": _csrf(client, edit)})
-    assert _routes(tmp_path)[0]["auto"]["weekday"] == 1          # moved: since restarts
+    client.post(edit, data={**FORM, "auto_weekdays": ["1"], "csrf": _csrf(client, edit)})
+    assert _routes(tmp_path)[0]["auto"]["weekdays"] == [1]          # moved: since restarts
 
     form_off = {k: v for k, v in FORM.items() if k != "auto"}
     client.post(edit, data={**form_off, "csrf": _csrf(client, edit)})
@@ -229,3 +231,60 @@ def test_a_run_lost_to_a_restart_is_not_shown_as_running_forever(env):
                            last_attempt="2026-11-09T08:01:00+01:00", result="running")
     page = client.get("/routes").get_data(as_text=True)
     assert "Výsledok neznámy" in page and "⏳ Beží" not in page
+
+
+# ---- several days a week ------------------------------------------------------
+
+def test_several_days_give_one_slot_each():
+    days = (0, 3)                                    # Monday and Thursday
+    assert last_slot(at(2026, 11, 4, 12, 0), days, "08:00") == at(2026, 11, 2, 8, 0)
+    assert last_slot(at(2026, 11, 5, 8, 0), days, "08:00") == at(2026, 11, 5, 8, 0)
+    assert next_slot(at(2026, 11, 3, 9, 0), days, "08:00") == at(2026, 11, 5, 8, 0)
+    assert next_slot(at(2026, 11, 5, 9, 0), days, "08:00") == at(2026, 11, 9, 8, 0)
+    since = at(2026, 10, 1)
+    ran_monday = at(2026, 11, 2, 8, 0)
+    assert not is_due(at(2026, 11, 4, 12, 0), days, "08:00", since, ran_monday)
+    assert is_due(at(2026, 11, 5, 8, 0), days, "08:00", since, ran_monday)
+
+
+def test_describe_lists_the_days():
+    assert zssk_auto.describe((0,), "08:00") == "každý pondelok o 08:00"
+    assert zssk_auto.describe((0, 3), "08:00") == "každý pondelok a štvrtok o 08:00"
+    assert zssk_auto.describe((0, 2, 4), "07:30") == \
+        "každý pondelok, streda a piatok o 07:30"
+    assert zssk_auto.describe(range(7), "08:00") == "každý deň o 08:00"
+
+
+def test_form_saves_several_days_and_needs_at_least_one(env):
+    app, client, tmp_path, _ = env
+    client.post("/routes/new", data={**FORM, "auto_weekdays": ["0", "3"],
+                                     "csrf": _csrf(client, "/routes/new")})
+    route = _routes(tmp_path)[0]
+    assert route["auto"] == {"weekdays": [0, 3], "time": "08:00"}
+    edit = f"/routes/{route['id']}/edit"
+    page = client.get(edit).get_data(as_text=True)
+    checked = re.findall(r'name="auto_weekdays" value="(\d)"\s+checked', page)
+    assert checked == ["0", "3"]
+    assert "Automaticky každý pondelok a štvrtok o 08:00" in \
+        client.get("/routes").get_data(as_text=True)
+
+    r = client.post(edit, data={**{k: v for k, v in FORM.items() if k != "auto_weekdays"},
+                                "csrf": _csrf(client, edit)})
+    assert r.status_code == 200
+    assert "vyber aspoň jeden deň" in r.get_data(as_text=True)
+
+
+def test_old_single_day_routes_still_run_and_keep_their_since(env):
+    app, client, tmp_path, calls = env
+    client.post("/routes/new", data={**FORM, "csrf": _csrf(client, "/routes/new")})
+    cfg_path = zssk_users.routes_file(tmp_path / "etc", "jakub")
+    cfg = json.loads(cfg_path.read_text())
+    cfg["routes"][0]["auto"] = {"weekday": 0, "time": "08:00"}       # old form
+    cfg["routes"][0]["auto_since"] = "2026-10-01T00:00:00+02:00"
+    cfg_path.write_text(json.dumps(cfg))
+    rid = cfg["routes"][0]["id"]
+    assert zssk_web.auto_tick(app, at(2026, 11, 9, 8, 1)) == f"jakub/{rid}"
+    _wait_idle(app)
+    edit = f"/routes/{rid}/edit"
+    client.post(edit, data={**FORM, "csrf": _csrf(client, edit)})   # same schedule
+    assert _routes(tmp_path)[0]["auto_since"] == "2026-10-01T00:00:00+02:00"
