@@ -878,7 +878,7 @@ def register_views(app: Flask) -> None:
         if not app.config.get("TG_BOT_NAME"):
             try:
                 me = zssk_telegram.TelegramAPI(zssk_telegram.load_token(etc)).call(
-                    "getMe", timeout=10)
+                    "getMe", http_timeout=10)
                 app.config["TG_BOT_NAME"] = me.get("username", "")
             except Exception:
                 pass

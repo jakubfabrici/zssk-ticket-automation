@@ -148,13 +148,13 @@ class TelegramAPI:
     def __init__(self, token: str):
         self.base = f"https://api.telegram.org/bot{token}/"
 
-    def call(self, method: str, timeout: float = 40, **params):
+    def call(self, method: str, http_timeout: float = 40, **params):
         body = json.dumps(params).encode("utf-8")
         request = urllib.request.Request(
             self.base + method, data=body,
             headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=http_timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:
@@ -899,7 +899,7 @@ class Bot:
         params = {"timeout": 25, "allowed_updates": ["message", "callback_query"]}
         if offset is not None:
             params["offset"] = offset
-        updates = self.api.call("getUpdates", timeout=40, **params) or []
+        updates = self.api.call("getUpdates", http_timeout=40, **params) or []
         for update in updates:
             offset = update["update_id"] + 1
             try:
@@ -928,7 +928,7 @@ def start_bot(app, interval: float = 3.0) -> threading.Thread:
                 if token:
                     log.warning("telegram bot started")
                     try:
-                        holder["bot"].api.call("setMyCommands", timeout=15,
+                        holder["bot"].api.call("setMyCommands", http_timeout=15,
                                                commands=COMMANDS)
                     except Exception as exc:
                         log.warning("setMyCommands: %s", exc)

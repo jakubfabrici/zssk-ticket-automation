@@ -23,11 +23,14 @@ print("bought: 1  exists: 2")
 
 
 class FakeAPI:
-    def __init__(self):
+    def __init__(self, updates=()):
         self.calls = []
+        self.updates = list(updates)
 
-    def call(self, method, timeout=40, **params):
+    def call(self, method, http_timeout=40, **params):
         self.calls.append((method, params))
+        if method == "getUpdates":
+            return self.updates
         if method == "sendMessage":
             return {"message_id": len(self.calls)}
         return True
@@ -384,3 +387,37 @@ def test_non_admin_cannot_set_the_token(env):
                          "csrf": _csrf(other, "/settings")})
     assert r.status_code == 403
     assert zssk_telegram.load_token(tmp_path / "etc") == ""
+
+
+def test_poll_once_passes_telegrams_own_timeout_and_advances_the_offset(env):
+    app, web, bot, api, *_ = env
+    api.updates = [msg(100, "/spoje", mid=7)]
+    assert bot.poll_once(None) == 8
+    method, params = api.calls[0]
+    assert method == "getUpdates" and params["timeout"] == 25 and "offset" not in params
+    api.updates = []
+    bot.poll_once(8)
+    assert [p for m, p in api.calls if m == "getUpdates"][-1]["offset"] == 8
+
+
+def test_real_client_keeps_http_and_api_timeouts_apart(monkeypatch):
+    seen = {}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "result": []}'
+
+    def fake_urlopen(request, timeout):
+        seen["http"] = timeout
+        seen["body"] = json.loads(request.data)
+        return Resp()
+
+    monkeypatch.setattr(zssk_telegram.urllib.request, "urlopen", fake_urlopen)
+    zssk_telegram.TelegramAPI("1:x").call("getUpdates", http_timeout=40, timeout=25)
+    assert seen == {"http": 40, "body": {"timeout": 25}}
