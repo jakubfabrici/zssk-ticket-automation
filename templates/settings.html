@@ -40,4 +40,30 @@
   <button type="submit" class="danger">Odstrániť uložené prihlásenie do konta</button>
 </form>
 {% endif %}
+
+<h2 id="telegram">Telegram</h2>
+{% if not tg_enabled %}
+<p class="muted">Telegram bot zatiaľ nie je zapnutý. Zapína ho správca na stránke Používatelia.</p>
+{% else %}
+  {% if tg_linked %}<p>✅ Telegram je prepojený ({{ tg_linked }} {{ 'chat' if tg_linked == 1 else 'chaty' }}).</p>{% endif %}
+  {% if tg_code %}
+  <div class="card">
+    <p>Pošli botovi tento kód do 15 minút:</p>
+    <p><strong style="font-size:1.3rem">/start {{ tg_code }}</strong></p>
+    {% if tg_bot %}<p><a href="https://t.me/{{ tg_bot }}?start={{ tg_code }}">Otvoriť @{{ tg_bot }} v Telegrame</a></p>{% endif %}
+  </div>
+  {% endif %}
+  <p class="muted">V Telegrame potom vieš robiť to isté ako tu: spoje, nákup, test,
+     automatický nákup, stav a osobné údaje. Heslo do ZSSK konta sa nastavuje len tu.</p>
+  <form method="post" action="{{ url_for('telegram_link') }}" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button type="submit" class="primary">{{ 'Prepojiť ďalší Telegram' if tg_linked else 'Prepojiť Telegram' }}</button>
+  </form>
+  {% if tg_linked %}
+  <form method="post" action="{{ url_for('telegram_unlink') }}" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">Odpojiť Telegram</button>
+  </form>
+  {% endif %}
+{% endif %}
 {% endblock %}
