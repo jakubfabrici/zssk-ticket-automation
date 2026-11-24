@@ -27,6 +27,7 @@ class Runner:
         self._label = ""
         self._returncode: int | None = None
         self._owner: str | None = None
+        self._run_id = 0
 
     def start(self, argv: list[str], label: str, owner: str | None = None,
               on_exit=None) -> None:
@@ -40,6 +41,7 @@ class Runner:
                 text=True, start_new_session=True,
             )
             self._lines = []
+            self._run_id += 1
             self._label = label
             self._owner = owner
             self._returncode = None
@@ -78,6 +80,7 @@ class Runner:
                 "lines": fresh,
                 "next_offset": offset + len(fresh),
                 "owner": self._owner,
+                "run_id": self._run_id,
             }
 
     def _recover_if_pump_died(self) -> None:

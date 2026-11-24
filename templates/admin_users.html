@@ -33,4 +33,14 @@
   </tr>
   {% endfor %}
 </table>
+
+<h2>Telegram bot</h2>
+<p>{{ '✅ Bot je zapnutý.' if tg_enabled else 'Bot je vypnutý.' }}
+   <span class="muted">Token získaš od @BotFather. Neukazuje sa, prázdne pole = ponechať.</span></p>
+<form method="post" action="{{ url_for('admin_telegram_token') }}">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <label>Token bota <input type="password" name="token" value="" autocomplete="off"></label>
+  <button type="submit" class="primary">Uložiť token</button>
+  {% if tg_enabled %}<button type="submit" name="remove" value="1" class="danger">Vypnúť bota</button>{% endif %}
+</form>
 {% endblock %}

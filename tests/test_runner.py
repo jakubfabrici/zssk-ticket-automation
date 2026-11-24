@@ -51,7 +51,7 @@ def test_stop_terminates_the_process_group():
 def test_fresh_runner_reports_idle():
     status = Runner().status()
     assert status == {"running": False, "returncode": None, "label": "",
-                      "lines": [], "next_offset": 0, "owner": None}
+                      "lines": [], "next_offset": 0, "owner": None, "run_id": 0}
 
 
 def test_start_tags_the_run_with_its_owner():

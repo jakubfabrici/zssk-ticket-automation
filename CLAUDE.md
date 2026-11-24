@@ -25,7 +25,7 @@ pve sú historické kópie, do repozitára sa zlúčili 2. 10. 2026.
 ## Nasadenie zmeny
 
 1. Zmeň kód tu, spusti testy: `python -m pytest -q` vo venv s Flask,
-   Selenium a pytest (171 testov, browserové sa preskočia bez Firefoxu).
+   Selenium a pytest (188 testov, browserové sa preskočia bez Firefoxu).
 2. Commit a push do pracovnej vetvy, PR do `main`.
 3. Nasadenie kódu (bez reinštalácie, zachová `/etc/zssk` aj `/var/lib/zssk`):
    v LXC 121 naklonuj vetvu do `/opt/zssk-src`, zálohuj súbory z
@@ -80,6 +80,20 @@ Overenie nasadenia: porovnaj `md5sum` súborov v `/opt/zssk` s repozitárom.
   behu `auto-<route>.log` (v UI odkaz „záznam“ na karte spoja).
 - Kontajner beží v UTC. `zssk_bulk` počíta „dnes“ a „vlak už odišiel“ v
   čase kontajnera, plánovač v Europe/Bratislava.
+
+## Telegram bot (od 24. 11. 2026)
+
+- `zssk_telegram.py`, beží ako vlákna vo `zssk-web` (`start_bot`: long
+  polling a oznamy o konci behu). Zdieľa Runner, používateľov, routes.json
+  a plánovač, takže nákup z bota blokuje tlačidlá vo webe a naopak.
+- Token: `/etc/zssk/telegram.env` (`TELEGRAM_TOKEN=`, 0600), nastavuje ho
+  správca na stránke Používatelia. Do repozitára ani commitov nepatrí.
+- Prepojenie: používateľ vo webe v Nastaveniach vygeneruje jednorazový kód
+  (15 min) a pošle botovi `/start <kód>`. Väzby a kódy sú v
+  `/etc/zssk/telegram.json` (0600). Bot obsluhuje len súkromné chaty
+  prepojených používateľov.
+- Len vo webe: heslo do ZSSK konta, pauza medzi nákupmi, správa používateľov.
+  Osobné údaje zadané v bote sa po uložení zmažú z chatu.
 
 ## Čo o e-shope platí (overené na živej stránke, september 2026)
 

@@ -26,6 +26,7 @@ from flask import (Flask, abort, current_app, jsonify, redirect,
 
 import zssk_bulk
 import zssk_auto
+import zssk_telegram
 import zssk_users
 from zssk_runner import RunnerBusy
 from zssk_users import UserStore
@@ -858,8 +859,53 @@ def register_views(app: Flask) -> None:
             except (OSError, ValueError):
                 values = {}
             values = dict(values, delay=cfg.get("delay", 45))
+        store = zssk_telegram.LinkStore(app.config["ETC_DIR"])
         return render_template("settings.html", errors=errors, values=values,
-                               zssk_user=credentials_state(app, read_cfg_safe(app)))
+                               zssk_user=credentials_state(app, read_cfg_safe(app)),
+                               tg_enabled=bool(zssk_telegram.load_token(app.config["ETC_DIR"])),
+                               tg_linked=len(store.chats_for(current_uid())),
+                               tg_code=session.pop("tg_code", None),
+                               tg_bot=app.config.get("TG_BOT_NAME", ""))
+
+    @app.route("/settings/telegram-link", methods=["POST"])
+    @login_required
+    def telegram_link():
+        etc = app.config["ETC_DIR"]
+        if not zssk_telegram.load_token(etc):
+            flash("Telegram bot zatiaľ nie je nastavený, požiadaj správcu.")
+            return redirect(url_for("settings"))
+        session["tg_code"] = zssk_telegram.LinkStore(etc).new_code(current_uid())
+        if not app.config.get("TG_BOT_NAME"):
+            try:
+                me = zssk_telegram.TelegramAPI(zssk_telegram.load_token(etc)).call(
+                    "getMe", http_timeout=10)
+                app.config["TG_BOT_NAME"] = me.get("username", "")
+            except Exception:
+                pass
+        return redirect(url_for("settings") + "#telegram")
+
+    @app.route("/settings/telegram-unlink", methods=["POST"])
+    @login_required
+    def telegram_unlink():
+        zssk_telegram.LinkStore(app.config["ETC_DIR"]).unlink_user(current_uid())
+        flash("Telegram odpojený.")
+        return redirect(url_for("settings") + "#telegram")
+
+    @app.route("/admin/telegram-token", methods=["POST"])
+    @login_required
+    @admin_required
+    def admin_telegram_token():
+        token = request.form.get("token", "").strip()
+        if request.form.get("remove"):
+            token = ""
+        elif not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", token):
+            flash("Token nevyzerá ako token od BotFathera (čísla:znaky).")
+            return redirect(url_for("admin_users"))
+        zssk_telegram.save_token(app.config["ETC_DIR"], token)
+        app.config.pop("TG_BOT_NAME", None)
+        flash("Telegram bot uložený, spustí sa do pár sekúnd." if token
+              else "Telegram bot vypnutý.")
+        return redirect(url_for("admin_users"))
 
     DEBUG_NAME_RE = re.compile(r"^debug-[A-Za-z0-9._-]+\.(png|html)$")
 
@@ -990,7 +1036,8 @@ def register_views(app: Flask) -> None:
         }
         return render_template("admin_users.html", users=store.users(),
                                me=current_uid(), admin_count=len(store.admins()),
-                               invite_links=invite_links)
+                               invite_links=invite_links,
+                               tg_enabled=bool(zssk_telegram.load_token(app.config["ETC_DIR"])))
 
     @app.route("/admin/users/add", methods=["POST"])
     @login_required
@@ -1022,6 +1069,7 @@ def register_views(app: Flask) -> None:
             store.delete(uid)
             _safe_rmtree(app.config["ETC_DIR"] / "users", uid)
             _safe_rmtree(app.config["STATE_DIR"] / "users", uid)
+            zssk_telegram.LinkStore(app.config["ETC_DIR"]).unlink_user(uid)
             flash(f"Používateľ '{uid}' zmazaný.")
         return redirect(url_for("admin_users"))
 
@@ -1061,6 +1109,7 @@ if __name__ == "__main__":
         runner=Runner(),
     )
     start_scheduler(application)
+    zssk_telegram.start_bot(application)
     # The container has one LAN address; nothing forwards this port anywhere.
     application.run(host=os.environ.get("ZSSK_BIND", "0.0.0.0"), port=8080,
                     threaded=True)
